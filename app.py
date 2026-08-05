@@ -296,7 +296,6 @@ def process_channel_posting(message):
         msg_content += "\n\n> 👥 **قائمة الحضور المسجلين (0):**\n> *لا توجد تسجيلات حتى الآن.*"
 
     try:
-        # إرسال الرسالة مباشرة إلى القناة بواسطة البوت لكي يمتلك صلاحية التعديل المطلقة
         sent_msg = bot.send_message(channel_input, msg_content, parse_mode="Markdown", reply_markup=keyboard)
         
         cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
@@ -526,7 +525,7 @@ def execute_broadcast(message):
     
     for (uid,) in users:
         try:
-            bot.send_message(uid, f"📢 **تنبيه هام من الإدارة:**\n\n> {broadcast_text}", parse_mode="Markdown")
+            bot.send_message(uid, f"📢 **تنبيه هام من الإدارة:**\n\n> {broadcast_text}", parse_Mode="Markdown")
             success_count += 1
         except Exception:
             fail_count += 1
@@ -653,7 +652,6 @@ def handle_channel_attendance(call):
         if show_in_channel == 1:
             updated_text += f"\n\n> 👥 **قائمة الحضور المسجلين ({new_count}):**{voters_list_str}"
 
-        # التعديل الفوري والمباشر لأن البوت هو مرسل الرسالة بالأصل!
         bot.edit_message_text(
             chat_id=channel_id,
             message_id=message_id,
@@ -663,111 +661,6 @@ def handle_channel_attendance(call):
         )
     except Exception as e:
         print(f"Error editing message directly: {e}")
-        
-    bot.answer_callback_query(call.id, f"✨ تم تسجيل حضورك بنجاح يا {fixed_name} وحصلت على 5 نقاط!", show_alert=True)
-
-@app.route('/' + TOKEN, methods=['POST'])
-def webhook_listener():
-    if request.headers.get('content-type') == 'application/json':
-        json_str = request.get_data().decode('UTF-8')
-        update = telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
-        return "OK", 200
-    else:
-        return "Forbidden", 403
-
-@app.route("/")
-def index():
-    return "Bot is running perfectly!", 200
-
-if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-    user = call.from_user
-    current_time = time.time()
-    
-    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    uname_str = f"@{user.username}" if user.username else "لا يوجد"
-    cursor.execute("SELECT full_name FROM user_profiles WHERE user_id = ?", (user.id,))
-    prof = cursor.fetchone()
-    if prof:
-        fixed_name = prof[0]
-    else:
-        fixed_name = user.first_name
-        cursor.execute("INSERT INTO user_profiles (user_id, full_name, username) VALUES (?, ?, ?)", (user.id, fixed_name, uname_str))
-        conn.commit()
-
-    cursor.execute("SELECT owner_id, count, title, end_time, is_closed, show_in_channel FROM polls WHERE poll_id = ?", (poll_id,))
-    poll = cursor.fetchone()
-    if not poll:
-        bot.answer_callback_query(call.id, "❌ انتهت صلاحية هذا البوست.", show_alert=True)
-        conn.close()
-        return
-        
-    owner_id, count, title, end_time, is_closed, show_in_channel = poll
-    
-    if is_closed == 1 or (end_time > 0 and current_time > end_time):
-        bot.answer_callback_query(call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True)
-        conn.close()
-        return
-        
-    cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
-    if cursor.fetchone():
-        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً!", show_alert=True)
-        conn.close()
-        return
-        
-    new_count = count + 1
-    cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
-    cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username) VALUES (?, ?, ?, ?)", (poll_id, user.id, fixed_name, uname_str))
-    
-    cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, 5) ON CONFLICT(user_id) DO UPDATE SET points = points + 5", (user.id,))
-    
-    cursor.execute("SELECT user_name FROM poll_votes WHERE poll_id = ?", (poll_id,))
-    all_voters = cursor.fetchall()
-    
-    conn.commit()
-    conn.close()
-    
-    owner_notification = (
-        f"🔔 **تسجيل حضور جديد في بوستك!**\n\n"
-        f"> • **البوست:** {title}\n"
-        f"> • **المسجل:** {fixed_name}\n"
-        f"> • **المعرف:** `{uname_str}`\n"
-        f"> • **الأيدي:** `{user.id}`"
-    )
-    try:
-        bot.send_message(owner_id, owner_notification, parse_mode="Markdown")
-    except Exception:
-        pass 
-        
-    try:
-        new_keyboard = types.InlineKeyboardMarkup()
-        new_keyboard.add(create_colored_btn(f"✅ تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}", style="success"))
-        
-        voters_list_str = ""
-        if show_in_channel == 1:
-            voters_lines = [f"> {i+1}. {v[0]}" for i, v in enumerate(all_voters)]
-            voters_list_str = "\n" + "\n".join(voters_lines)
-
-        updated_text = f"📢 **{title}**\n\n> *اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:*"
-        if show_in_channel == 1:
-            updated_text += f"\n\n> 👥 **قائمة الحضور المسجلين ({new_count}):**{voters_list_str}"
-
-        bot.edit_message_text(
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            text=updated_text,
-            parse_mode="Markdown",
-            reply_markup=new_keyboard
-        )
-    except Exception as e:
-        # طباعة الخطأ أو تجاهله في حال لم يكن البوت مشرفاً أو رُفعت الرسالة بشكل خاطئ
-        print(f"Error editing message: {e}")
         
     bot.answer_callback_query(call.id, f"✨ تم تسجيل حضورك بنجاح يا {fixed_name} وحصلت على 5 نقاط!", show_alert=True)
 
