@@ -86,6 +86,13 @@ def init_db():
                         PRIMARY KEY (user_id, channel_id)
                     )""")
 
+  # جدول تتبع إجمالي الزوار لكل قناة (أكثر القنوات حصولاً على الزوار)
+  cursor.execute("""CREATE TABLE IF NOT EXISTS channel_total_visits (
+                        channel_id TEXT PRIMARY KEY,
+                        channel_title TEXT,
+                        visits_count INTEGER DEFAULT 0
+                    )""")
+
   cursor.execute("""CREATE TABLE IF NOT EXISTS authorized_question_creators (
                         user_id INTEGER PRIMARY KEY
                     )""")
@@ -439,7 +446,9 @@ def send_welcome(message):
     except ValueError:
       pass
 
-  cursor.execute("SELECT visits_count FROM referrals WHERE owner_id = ?", (user_id,))
+  cursor.execute(
+      "SELECT visits_count FROM referrals WHERE owner_id = ?", (user_id,)
+  )
   res = cursor.fetchone()
   total_visits = res[0] if res else 0
   cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
@@ -579,6 +588,194 @@ def callback_check_subscription(call):
         "❌ لم تقم بالاشتراك في القناة بعد أو لم يتم رصد اشتراكك!",
         show_alert=True,
     )
+
+
+# --- معالج زر تسجيل الحضور وتحديث عداد زوار القناة تلقائياً ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
+def handle_attendance_click(call):
+  user_id = call.from_user.id
+  if not check_forced_subscription(user_id):
+    bot.answer_callback_query(
+        call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True
+    )
+    send_subscription_required_message(call.message.chat.id)
+    return
+
+  poll_id = call.data.replace("attend_", "")
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+
+  cursor.execute(
+      "SELECT owner_id, count, title, end_time, is_closed, show_in_channel,"
+      " channel_id, message_id FROM polls WHERE poll_id = ?",
+      (poll_id,),
+  )
+  poll = cursor.fetchone()
+  if not poll:
+    bot.answer_callback_query(
+        call.id, "❌ عذراً، بوست الحضور غير موجود أو تم حذفه.", show_alert=True
+    )
+    conn.close()
+    return
+
+  (
+      owner_id,
+      count,
+      title,
+      end_time,
+      is_closed,
+      show_in_channel,
+      channel_id,
+      message_id,
+  ) = poll
+
+  if is_closed == 1:
+    bot.answer_callback_query(
+        call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True
+    )
+    conn.close()
+    return
+
+  if end_time > 0 and time.time() > end_time:
+    cursor.execute("UPDATE polls SET is_closed = 1 WHERE poll_id = ?", (poll_id,))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(
+        call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True
+    )
+    return
+
+  cursor.execute(
+      "SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?",
+      (poll_id, user_id),
+  )
+  if cursor.fetchone():
+    bot.answer_callback_query(
+        call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً في هذا البوست!", show_alert=True
+    )
+    conn.close()
+    return
+
+  user_name = call.from_user.first_name
+  username = (
+      f"@{call.from_user.username}" if call.from_user.username else "لا يوجد"
+  )
+  now_ts = time.time()
+
+  cursor.execute(
+      "INSERT INTO poll_votes (poll_id, user_id, user_name, username,"
+      " vote_timestamp) VALUES (?, ?, ?, ?, ?)",
+      (poll_id, user_id, user_name, username, now_ts),
+  )
+
+  new_count = count + 1
+  cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
+
+  today_str = datetime.now().strftime("%Y-%m-%d")
+  cursor.execute(
+      "INSERT INTO channel_daily_attendance (user_id, channel_id, date_str,"
+      " count) VALUES (?, ?, ?, 1) ON CONFLICT(user_id, channel_id, date_str) DO"
+      " UPDATE SET count = count + 1",
+      (user_id, channel_id, today_str),
+  )
+
+  # تحديث وزيادة عداد الزوار الكلي للقناة (أكثر القنوات حصولاً على الزوار)
+  try:
+    chat_info = bot.get_chat(channel_id)
+    channel_title = chat_info.title or channel_id
+  except Exception:
+    channel_title = str(channel_id)
+
+  cursor.execute(
+      "INSERT INTO channel_total_visits (channel_id, channel_title,"
+      " visits_count) VALUES (?, ?, 1) ON CONFLICT(channel_id) DO UPDATE SET"
+      " visits_count = visits_count + 1, channel_title = ?",
+      (str(channel_id), channel_title, channel_title),
+  )
+
+  points_earned = 10
+  cursor.execute(
+      "INSERT INTO user_points (user_id, points) VALUES (?, ?) ON"
+      " CONFLICT(user_id) DO UPDATE SET points = points + ?",
+      (user_id, points_earned, points_earned),
+  )
+  cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+  user_pts = cursor.fetchone()[0]
+  b_name, b_icon = get_user_badge(user_pts)
+  cursor.execute(
+      "INSERT OR REPLACE INTO user_badges (user_id, badge_name, badge_icon)"
+      " VALUES (?, ?, ?)",
+      (user_id, b_name, b_icon),
+  )
+
+  conn.commit()
+
+  cursor.execute(
+      "SELECT user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,)
+  )
+  all_votes = cursor.fetchall()
+  conn.close()
+
+  try:
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
+        create_colored_btn(
+            f"✅ تسجيل الحضور [{new_count}]",
+            callback_data=f"attend_{poll_id}",
+            style="success",
+        )
+    )
+    keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
+
+    time_note = "\n<i>⏱️ البوست مفتوح طوال الوقت لتسجيل الحضور.</i>"
+    msg_content = (
+        f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل"
+        f" حضورك الرسمي فوراً:</i>{time_note}"
+    )
+
+    if show_in_channel == 1:
+      voters_lines = [
+          f"{i+1}. <b>{html.escape(v[0])}</b> ({html.escape(v[1])})"
+          for i, v in enumerate(all_votes)
+      ]
+      voters_str = (
+          "\n".join(voters_lines)
+          if voters_lines
+          else "لا توجد تسجيلات حتى الآن."
+      )
+      msg_content += (
+          f"\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين"
+          f" ({new_count}):</b>\n{voters_str}</blockquote>"
+      )
+
+    bot.edit_message_text(
+        chat_id=channel_id,
+        message_id=message_id,
+        text=msg_content,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+  except Exception as e:
+    print(f"Error updating channel message on attend: {e}")
+
+  bot.answer_callback_query(
+      call.id,
+      f"✅ تم تسجيل حضورك بنجاح!\n➕ حصلت على {points_earned} نقاط ووسام: {b_icon}"
+      f" {b_name}",
+      show_alert=True,
+  )
+
+  try:
+    owner_msg = (
+        f"🔔 <b>مستخدم جديد سجل حضوره في بوستك!</b>\n\n📌 <b>البوست:</b>"
+        f" {html.escape(title)}\n👤 <b>الاسم:</b>"
+        f" {html.escape(user_name)}\n🔗 <b>المعرف:</b> {username}\n📊"
+        f" <b>إجمالي الحضور الآن:</b> {new_count}"
+    )
+    bot.send_message(owner_id, owner_msg, parse_mode="HTML")
+  except Exception:
+    pass
 
 
 @bot.message_handler(commands=["backup"])
@@ -1110,6 +1307,16 @@ def handle_menu_callbacks(call):
     bot.answer_callback_query(call.id)
     conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
     cursor = conn.cursor()
+
+    # جلب أكثر القنوات حصولاً على الزوار
+    cursor.execute("""
+            SELECT channel_title, visits_count 
+            FROM channel_total_visits 
+            WHERE visits_count > 0 
+            ORDER BY visits_count DESC LIMIT 5
+        """)
+    top_channels = cursor.fetchall()
+
     cursor.execute("""
             SELECT r.owner_id, r.visits_count, p.full_name 
             FROM referrals r 
@@ -1130,11 +1337,27 @@ def handle_menu_callbacks(call):
     top_points = cursor.fetchall()
     conn.close()
 
-    leaderboard_text = (
-        "🏆 <b>قوائم المتصدرين في البوت:</b>\n\n🔗 <b>أكثر المستخدمين جلباً"
-        " للزوار:</b>\n"
-    )
+    leaderboard_text = "🏆 <b>قوائم المتصدرين في البوت:</b>\n\n"
 
+    # قائمة أكثر القنوات زواراً
+    leaderboard_text += "📢 <b>أكثر القنوات حصولاً على الزوار:</b>\n"
+    if not top_channels:
+      leaderboard_text += (
+          "<blockquote>• لا توجد بيانات قنوات حتى الآن..</blockquote>\n\n"
+      )
+    else:
+      medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+      for i, (c_title, c_visits) in enumerate(top_channels):
+        medal = medals[i] if i < len(medals) else "🔹"
+        name_display = html.escape(c_title) if c_title else "قناة"
+        leaderboard_text += (
+            f"<blockquote>{medal} <b>{name_display}</b> — <b>{c_visits}</b>"
+            " زائر</blockquote>\n"
+        )
+      leaderboard_text += "\n"
+
+    # قائمة أكثر المستخدمين جلباً للزوار
+    leaderboard_text += "🔗 <b>أكثر المستخدمين جلباً للزوار:</b>\n"
     if not top_users:
       leaderboard_text += "<blockquote>• لا توجد بيانات حتى الآن..</blockquote>\n\n"
     else:
@@ -1148,8 +1371,8 @@ def handle_menu_callbacks(call):
         )
       leaderboard_text += "\n"
 
+    # قائمة أكثر الأعضاء تفاعلاً ونقاطاً
     leaderboard_text += "🌟 <b>أكثر الأعضاء تفاعلاً ونقاطاً والأوسمة:</b>\n"
-
     if not top_points:
       leaderboard_text += (
           "<blockquote>• لا توجد نقاط مسجلة حتى الآن..</blockquote>"
