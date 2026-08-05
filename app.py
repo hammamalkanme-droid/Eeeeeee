@@ -1,39 +1,64 @@
-import streamlit as st
-import pandas as pd
+import telebot
+from telebot import types
 
-st.set_page_config(page_title="منظومة فريق النخبة", layout="wide")
+# ضع التوكن الذي أعطاه لك BotFather هنا بين القوسين
+TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
+bot = telebot.TeleBot(TOKEN)
 
-st.markdown("<h1 style='text-align: right;'>🌐 لوحة تحكم فريق النخبة</h1>", unsafe_allow_html=True)
-st.markdown("---")
+# قائمة مؤقتة لتخزين المهام
+tasks_db = []
 
-# بيانات تجريبية سريعة تضمن اشتغال الصفحة فوراً
-if 'tasks' not in st.session_state:
-    st.session_state.tasks = pd.DataFrame({
-        "المشروع": ["بوتات زيد", "مشروع فضاء", "مناهل العلم"],
-        "المهمة": ["رفع الملخصات", "متابعة الجدول", "إعداد الامتحانات"],
-        "المسؤول": ["سفيان اليونسي", "احميدة جمال", "عبد القادر مجيد"],
-        "الحالة": ["قيد العمل", "مستمر", "لم يبدأ"]
-    })
+# أمر البداية /start
+@bot.message_handler(commands=['start'])
+def send_welcome(markup_msg):
+    user_name = markup_msg.from_user.first_name
+    welcome_text = (
+        f"أهلاً بك يا {user_name} في بوت إدارة فريق النخبة 🌐\n\n"
+        "الأوامر المتاحة:\n"
+        "📌 /newtask - إضافة مهمة جديدة\n"
+        "📋 /tasks - عرض كافة المهام الحالية"
+    )
+    bot.reply_to(markup_msg, welcome_text)
 
-# القائمة الجانبية لتسجيل الدخول
-st.sidebar.header("تسجيل الدخول")
-user = st.sidebar.selectbox("اختر اسمك:", ["همَّام الكانمي (المدير)", "سفيان اليونسي", "عبد القادر مجيد", "احميدة جمال"])
-
-st.sidebar.success(f"مرحباً بك: {user}")
-
-# عرض المهام
-st.subheader("📋 جدول المهام والعمليات")
-st.dataframe(st.session_state.tasks, use_container_width=True)
-
-# إضافة مهمة جديدة
-st.subheader("➕ إضافة مهمة جديدة")
-with st.form("new_task_form"):
-    p_name = st.selectbox("المشروع", ["بوتات زيد", "مشروع فضاء", "مناهل العلم", "الندوات والفعاليات"])
-    t_title = st.text_input("عنوان المهمة")
-    t_assignee = st.text_input("المسؤول عنها")
-    submitted = st.form_submit_button("حفظ المهمة")
+# أمر عرض المهام /tasks
+@bot.message_handler(commands=['tasks'])
+def show_tasks(message):
+    if not tasks_db:
+        bot.reply_to(message, "لا توجد أي مهام مسجلة حالياً.")
+        return
     
-    if submitted and t_title:
-        new_row = pd.DataFrame({"المشروع": [p_name], "المهمة": [t_title], "المسؤول": [t_assignee], "الحالة": ["قيد العمل"]})
-        st.session_state.tasks = pd.concat([st.session_state.tasks, new_row], ignore_index=True)
-        st.success("✅ تم إضافة المهمة بنجاح! دير تحديث للصفحة باش تشوفها.")
+    response = "📋 **قائمة مهام فريق النخبة:**\n\n"
+    for i, t in enumerate(tasks_db, 1):
+        response += f"{i}. **المشروع:** {t['project']}\n   **المهمة:** {t['task']}\n   **المسؤول:** {t['assignee']}\n   **الحالة:** {t['status']}\n\n"
+    
+    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+
+# أمر إضافة مهمة جديدة /newtask
+@bot.message_handler(commands=['newtask'])
+def start_add_task(message):
+    msg = bot.reply_to(message, "أرسل تفاصيل المهمة بهذا الشكل:\n`اسم المشروع | المهمة | اسم المسؤول`", parse_mode="Markdown")
+    bot.register_next_step_handler(msg, save_task)
+
+def save_task(message):
+    try:
+        parts = message.text.split('|')
+        if len(parts) == 3:
+            project = parts[0].strip()
+            task_desc = parts[1].strip()
+            assignee = parts[2].strip()
+            
+            tasks_db.append({
+                "project": project,
+                "task": task_desc,
+                "assignee": assignee,
+                "status": "قيد العمل ⏳"
+            })
+            bot.reply_to(message, "✅ تم تسجيل المهمة وإضافتها بنجاح!")
+        else:
+            bot.reply_to(message, "❌ الخطأ في التنسيق. تأكد من استخدام الفاصلة العمودية (|).")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء حفظ المهمة، حاول مجدداً.")
+
+# تشغيل البوت
+print("البوت يعمل الآن...")
+bot.infinity_polling()
