@@ -1,39 +1,100 @@
 import telebot
 from telebot import types
 
-# ضع التوكن الذي أعطاه لك BotFather هنا بين القوسين
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
 bot = telebot.TeleBot(TOKEN)
 
-# قائمة مؤقتة لتخزين المهام
+# قواعد بيانات مؤقتة لتنظيم العمل بالكامل
 tasks_db = []
+team_members = {
+    "سفيان اليونسي": "رئيس العمليات / تطوير",
+    "عبد القادر مجيد": "إدارة المشاريع",
+    "احميدة جمال": "تنظيم الجداول والفعاليات",
+    "علي النايلي": "الدعم التقني"
+}
 
-# أمر البداية /start
-@bot.message_handler(commands=['start'])
-def send_welcome(markup_msg):
-    user_name = markup_msg.from_user.first_name
+# 1. قائمة البداية والخدمات الشاملة
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_tasks = types.InlineKeyboardButton("📋 عرض المهام", callback_data="show_tasks")
+    btn_add = types.InlineKeyboardButton("➕ إضافة مهمة", callback_data="add_task_info")
+    btn_team = types.InlineKeyboardButton("👥 أعضاء الفريق", callback_data="show_team")
+    btn_projects = types.InlineKeyboardButton("🌐 مشاريع النخبة", callback_data="show_projects")
+    markup.add(btn_tasks, btn_add, btn_team, btn_projects)
+    
     welcome_text = (
-        f"أهلاً بك يا {user_name} في بوت إدارة فريق النخبة 🌐\n\n"
-        "الأوامر المتاحة:\n"
-        "📌 /newtask - إضافة مهمة جديدة\n"
-        "📋 /tasks - عرض كافة المهام الحالية"
+        f"🌐 **أهلاً بك يا {message.from_user.first_name} في البوت الرسمي لفريق النخبة**\n\n"
+        "المنظومة الرقمية الإدارية المتكاملة لإدارة المهام، المتابعة، والخدمات.\n"
+        "اختر أحد الخيارات أدناه للبدء:"
     )
-    bot.reply_to(markup_msg, welcome_text)
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
-# أمر عرض المهام /tasks
-@bot.message_handler(commands=['tasks'])
-def show_tasks(message):
-    if not tasks_db:
-        bot.reply_to(message, "لا توجد أي مهام مسجلة حالياً.")
-        return
-    
-    response = "📋 **قائمة مهام فريق النخبة:**\n\n"
-    for i, t in enumerate(tasks_db, 1):
-        response += f"{i}. **المشروع:** {t['project']}\n   **المهمة:** {t['task']}\n   **المسؤول:** {t['assignee']}\n   **الحالة:** {t['status']}\n\n"
-    
-    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+# 2. الاستجابة للأزرار التفاعلية
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    if call.data == "show_tasks":
+        if not tasks_db:
+            bot.answer_callback_query(call.id, "لا توجد مهام حالياً")
+            bot.send_message(call.message.chat.id, "📋 **قائمة المهام:**\nلا توجد أي مهام مسجلة حتى الآن.")
+        else:
+            resp = "📋 **سجل مهام فريق النخبة الحالي:**\n\n"
+            for idx, t in enumerate(tasks_db, 1):
+                resp += f"{idx}. **المشروع:** {t['project']}\n   **المهمة:** {t['task']}\n   **المسؤول:** {t['assignee']}\n   **الحالة:** {t['status']}\n\n"
+            bot.send_message(call.message.chat.id, resp, parse_mode="Markdown")
+            
+    elif call.data == "add_task_info":
+        bot.send_message(call.message.chat.id, 
+                         "📌 **طريقة إضافة مهمة جديدة:**\n\n"
+                         "أرسل الرسالة بهذا الشكل المباشر:\n"
+                         "`/new task | اسم المشروع | تفاصيل المهمة | اسم المسؤول`\n\n"
+                         "مثال:\n`/new task | بوتات زيد | رفع ملخصات الفيزيا | سفيان`", 
+                         parse_mode="Markdown")
+                         
+    elif call.data == "show_team":
+        team_text = "👥 **فريق إدارة النخبة:**\n\n"
+        for name, role in team_members.items():
+            team_text += f"▪️ **{name}** -> *{role}*\n"
+        bot.send_message(call.message.chat.id, team_text, parse_mode="Markdown")
+        
+    elif call.data == "show_projects":
+        proj_text = (
+            "🌐 **مشاريع فريق النخبة النشطة:**\n\n"
+            "1️⃣ **بوتات زيد:** توزيع الملخصات والاختبارات الإلكترونية.\n"
+            "2️⃣ **مشروع فضاء:** تنظيم وتنسيق الجداول والفعاليات.\n"
+            "3️⃣ **مناهل العلم:** الأرشيف التعليمي للطلاب.\n"
+            "4️⃣ **الندوات واللقاءات:** مثل ويبينار سبيل الهمّة."
+        )
+        bot.send_message(call.message.chat.id, proj_text, parse_mode="Markdown")
 
-# أمر إضافة مهمة جديدة /newtask
+# 3. أمر إضافة مهمة سريعة
+@bot.message_handler(commands=['new'])
+def add_new_task_direct(message):
+    try:
+        content = message.text.replace('/new', '').strip()
+        if content.startswith('task'):
+            content = content.replace('task', '').strip()
+            
+        parts = content.split('|')
+        if len(parts) >= 3:
+            project = parts[0].strip()
+            task_desc = parts[1].strip()
+            assignee = parts[2].strip()
+            
+            tasks_db.append({
+                "project": project,
+                "task": task_desc,
+                "assignee": assignee,
+                "status": "قيد العمل ⏳"
+            })
+            bot.reply_to(message, f"✅ تم تسجيل المهمة بنجاح لصالح ({assignee}) وتم إدراجها في المنظومة!")
+        else:
+            bot.reply_to(message, "❌ الخطأ في التنسيق. استخدم الأمر هكذا:\n`/new task | المشروع | المهمة | المسؤول`", parse_mode="Markdown")
+    except Exception:
+حدث خطأ، تأكد من كتابة الأمر بالشكل الصحيح.
+
+print("البوت المتكامل يعمل الآن...")
+bot.infinity_polling()
 @bot.message_handler(commands=['newtask'])
 def start_add_task(message):
     msg = bot.reply_to(message, "أرسل تفاصيل المهمة بهذا الشكل:\n`اسم المشروع | المهمة | اسم المسؤول`", parse_mode="Markdown")
