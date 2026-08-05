@@ -56,6 +56,13 @@ def init_db():
                         PRIMARY KEY (user_id, channel_id, date_str)
                     )''')
 
+    cursor.execute('''CREATE TABLE IF NOT EXISTS channel_daily_posts (
+                        channel_id TEXT,
+                        date_str TEXT,
+                        posts_count INTEGER DEFAULT 0,
+                        PRIMARY KEY (channel_id, date_str)
+                    )''')
+
     cursor.execute('''CREATE TABLE IF NOT EXISTS saved_channels (
                         user_id INTEGER,
                         channel_id TEXT,
@@ -214,6 +221,35 @@ def send_welcome(message):
         f"👇 <b>اختر ما تحتاجه من الأزرار الملونة أدناه:</b>"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="HTML", reply_markup=markup)
+
+@bot.message_handler(commands=['backup'])
+def cmd_backup(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if os.path.exists('roulette_bot.db'):
+        with open('roulette_bot.db', 'rb') as f:
+            bot.send_document(message.chat.id, f, caption="💾 نسخة احتياطية لقاعدة البيانات الحالية.")
+    else:
+        bot.reply_to(message, "❌ ملف قاعدة البيانات غير موجود.")
+
+@bot.message_handler(commands=['restore'])
+def cmd_restore(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    user_states[ADMIN_ID] = "waiting_restore_file"
+    bot.reply_to(message, "📂 <i>أرسل الآن ملف قاعدة البيانات (.db) لاستعادته:</i>", parse_mode="HTML")
+
+@bot.message_handler(content_types=['document'], func=lambda message: message.from_user.id == ADMIN_ID and user_states.get(ADMIN_ID) == "waiting_restore_file")
+def handle_restore_file(message):
+    user_states.pop(ADMIN_ID, None)
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        with open('roulette_bot.db', 'wb') as f:
+            f.write(downloaded_file)
+        bot.reply_to(message, "✅ <b>تم استعادة قاعدة البيانات بنجاح!</b>", parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, f"❌ حدث خطأ أثناء الاستعادة: <code>{e}</code>", parse_mode="HTML")
 
 @bot.message_handler(commands=['points', 'رصيدي'])
 def cmd_points(message):
@@ -406,19 +442,18 @@ def handle_menu_callbacks(call):
             for c_title, c_id in saved:
                 markup.add(create_colored_btn(f"📢 {c_title}", callback_data=f"select_chan_{c_id}", style="success"))
             markup.add(create_colored_btn("➕ إضافة قناة جديدة", callback_data="add_new_channel_prompt", style="primary"))
-            bot.send_message(call.message.chat.id, "🚀 <b>اختر إحدى قنواتك المحفوظة أو أضف قناة جديدة للنشر:</b>", parse_mode="HTML", reply_markup=markup)
+            bot.send_message(call.message.chat.id, "🚀 <b>اختر إحدى قنواتك المحفوظة أو أضف قناة جديدة للنشر:</b>\n\n<i>(ملاحظة: الحد الأقصى لبوستات الحضور هو بوستان فقط لكل قناة يومياً)</i>", parse_mode="HTML", reply_markup=markup)
         else:
             user_states[user_id] = "waiting_channel_username"
             bot.send_message(
                 call.message.chat.id, 
                 "🚀 <b>نشر بوست الحضور مباشرة بواسطة البوت:</b>\n\n"
-                "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.</blockquote>", 
+                "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.\n(الحد الأقصى بوستان يومياً لكل قناة).</blockquote>", 
                 parse_mode="HTML"
             )
     
     elif action == "create_question":
         bot.answer_callback_query(call.id)
-        # التحقق هل المستخدم هو المطور أو مضاف لقائمة مصممي الأسئلة
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM authorized_question_creators WHERE user_id = ?", (user_id,))
@@ -545,7 +580,7 @@ def add_new_channel_prompt(call):
     user_id = call.from_user.id
     user_states[user_id] = "waiting_channel_username"
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "🚀 <b>أرسل الآن معرف القناة الجديدة أو الرابط أو الأيدي:</b>", parse_mode="HTML")
+    bot.send_message(call.message.chat.id, "🚀 <b>أرسل الآن معرف القناة الجديدة أو الرابط أو الأيدي:</b>\n<i>(الحد الأقصى بوستان يومياً لكل قناة)</i>", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("select_chan_"))
 def select_saved_channel(call):
@@ -736,6 +771,27 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
     
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
+    
+    # التحقق المسبق من عدد بوستات الحضور المنشورة لهذه القناة اليوم (أقصى حد بوستان يومياً)
+    try:
+        chat_info = bot.get_chat(channel_input)
+        real_channel_id = str(chat_info.id)
+        c_title = chat_info.title or real_channel_id
+    except Exception as e:
+        conn.close()
+        bot.send_message(chat_id_to_send, f"❌ <b>فشل الوصول للقناة أو المعرف غير صحيح:</b>\n<code>{e}</code>", parse_mode="HTML")
+        return
+
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute("SELECT posts_count FROM channel_daily_posts WHERE channel_id = ? AND date_str = ?", (real_channel_id, today_str))
+    p_row = cursor.fetchone()
+    posts_today = p_row[0] if p_row else 0
+    
+    if posts_today >= 2:
+        conn.close()
+        bot.send_message(chat_id_to_send, "⚠️ <b>عذراً، لقد وصلت للحد الأقصى لنشر بوستات الحضور في هذه القناة اليوم (مرتان فقط كحد أقصى يومياً).</b>", parse_mode="HTML")
+        return
+
     cursor.execute("SELECT title, duration, show_in_channel FROM user_settings WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     
@@ -757,20 +813,17 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
         msg_content += "\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين (0):</b>\nلا توجد تسجيلات حتى الآن.</blockquote>"
 
     try:
-        sent_msg = bot.send_message(channel_input, msg_content, parse_mode="HTML", reply_markup=keyboard)
+        sent_msg = bot.send_message(real_channel_id, msg_content, parse_mode="HTML", reply_markup=keyboard)
         
-        # حفظ القناة في القنوات المحفوظة للمستخدم
-        try:
-            chat_info = bot.get_chat(sent_msg.chat.id)
-            c_title = chat_info.title or str(sent_msg.chat.id)
-        except Exception:
-            c_title = str(sent_msg.chat.id)
-            
+        # حفظ القناة وتحديث عداد البوستات اليومية للقناة
         cursor.execute("INSERT OR REPLACE INTO saved_channels (user_id, channel_id, channel_title) VALUES (?, ?, ?)", 
-                       (user_id, str(sent_msg.chat.id), c_title))
+                       (user_id, real_channel_id, c_title))
+
+        cursor.execute("INSERT INTO channel_daily_posts (channel_id, date_str, posts_count) VALUES (?, ?, 1) ON CONFLICT(channel_id, date_str) DO UPDATE SET posts_count = posts_count + 1", 
+                       (real_channel_id, today_str))
 
         cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                       (poll_id, user_id, 0, title, end_time, 0, show_in_channel, str(sent_msg.chat.id), sent_msg.message_id))
+                       (poll_id, user_id, 0, title, end_time, 0, show_in_channel, real_channel_id, sent_msg.message_id))
         conn.commit()
         conn.close()
         
@@ -1114,19 +1167,19 @@ def handle_channel_attendance(call):
         bot.answer_callback_query(call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True)
         conn.close()
         return
-        
-    cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
-    if cursor.fetchone():
-        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً في هذا البوست!", show_alert=True)
-        conn.close()
-        return
 
-    # التحقق من الحد الأقصى لتسجيل الحضور في نفس القناة يومياً (مرتان كحد أقصى)
+    # التحقق الصارم من الحد الأقصى لتسجيل الحضور في نفس القناة يومياً (مرتان كحد أقصى لكل قناة)
     cursor.execute("SELECT count FROM channel_daily_attendance WHERE user_id = ? AND channel_id = ? AND date_str = ?", (user.id, channel_id, today_str))
     att_row = cursor.fetchone()
     att_count = att_row[0] if att_row else 0
     if att_count >= 2:
         bot.answer_callback_query(call.id, "⚠️ لقد وصلت للحد الأقصى لتسجيل الحضور في هذه القناة اليوم (مرتان فقط يومياً).", show_alert=True)
+        conn.close()
+        return
+        
+    cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
+    if cursor.fetchone():
+        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً في هذا البوست!", show_alert=True)
         conn.close()
         return
         
