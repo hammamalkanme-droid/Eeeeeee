@@ -315,7 +315,7 @@ def send_welcome(message):
 
     markup = get_main_inline_keyboard(user_id)
     welcome_text = (
-        f"✨ <b>مرحباً بك عزيزي {message.from_user.first_name}</b>\n\n"
+        f"✨ <b>مرحباً بك عزيزي {html.escape(message.from_user.first_name)}</b>\n\n"
         f"<blockquote>📌 <i>أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، مع تحليلات ذكية ونظام الأوسمة وتحديات السرعة المتقدمة.</i></blockquote>\n\n"
         f"🏅 <b>وسامك الحالي:</b> {badge_icon} <b>{badge_name}</b>\n\n"
         f"⚠️ <b>تنبيه هام جداً:</b> ارفع البوت <b>مشرفاً (Admin)</b> في قناتك مع صلاحية (تعديل رسائل الآخرين وحذفها) لكي يعمل التحديث الفوري.\n\n"
@@ -345,7 +345,7 @@ def callback_check_subscription(call):
         
         markup = get_main_inline_keyboard(user_id)
         welcome_text = (
-            f"✨ <b>مرحباً بك مجدداً يا {call.from_user.first_name}</b>\n\n"
+            f"✨ <b>مرحباً بك مجدداً يا {html.escape(call.from_user.first_name)}</b>\n\n"
             f"🏅 <b>وسامك الحالي:</b> {badge_icon} <b>{badge_name}</b>\n\n"
             f"👇 <b>اختر ما تحتاجه من الأزرار أدناه:</b>"
         )
@@ -434,7 +434,7 @@ def show_profile_data(chat_id, user_id):
     conn.close()
     
     coupons_str = ", ".join(used_coupons) if used_coupons else "لا توجد"
-    channels_str = ", ".join([f"{c[0]} ({c[1]})" for c in saved_channels]) if saved_channels else "لا توجد قنوات مسجلة"
+    channels_str = ", ".join([f"{html.escape(c[0])} ({c[1]})" for c in saved_channels]) if saved_channels else "لا توجد قنوات مسجلة"
     
     profile_text = (
         f"👤 <b>لوحة الملف الشخصي والإحصائيات الفردية:</b>\n\n"
@@ -585,16 +585,18 @@ def handle_menu_callbacks(call):
         user_polls = cursor.fetchall()
         conn.close()
         
-        if not user_polls:
-            bot.send_message(call.message.chat.id, "📊 <b>الإحصائيات والتحليلات المتقدمة:</b>\n\n<blockquote>⚠️ لا توجد بوستات منشأة حتى الآن.</blockquote>", parse_mode="HTML")
-            return
-            
         stats_text = (
             "📊 <b>إحصائيات وتحليلي المتقدم للبوستات والقنوات:</b>\n\n"
             "<blockquote>💡 <i>توضيح البيانات (Unique vs Total): الأرقام أدناه توضح إجمالي التفاعلات، مع إمكانية استعراض المستخدمين الفريدين (Unique Reach) عند فتح تفاصيل كل بوست لتجنب تضخيم الأرقام الناتجة عن تداخل المشتركين.</i></blockquote>\n\n"
-            "👇 <i>اختر البوست المطلوب لمعاينة التحليلات المعمقة:</i>"
+            "👇 <i>اختر البوست المطلوب لمعاينة التحليلات أو استخرج تقرير القنوات:</i>"
         )
         markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(create_colored_btn("📑 استخراج تقرير نشاط قنواتي (أسبوعي)", callback_data="report_weekly_supervisor", style="primary"))
+        
+        if not user_polls:
+            bot.send_message(call.message.chat.id, stats_text + "\n\n⚠️ <i>لا توجد بوستات منشأة حتى الآن.</i>", parse_mode="HTML", reply_markup=markup)
+            return
+            
         for pid, title, cnt in user_polls:
             short_title = title[:25] + "..." if len(title) > 25 else title
             markup.add(create_colored_btn(f"📌 {short_title} (إجمالي: {cnt})", callback_data=f"view_stats_{pid}", style="success"))
@@ -629,8 +631,8 @@ def handle_menu_callbacks(call):
             medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
             for i, (uid, count, fname, uname) in enumerate(top_users):
                 medal = medals[i] if i < len(medals) else "🔹"
-                name_display = fname if fname else f"مستخدم {uid}"
-                uname_display = f" ({uname})" if uname and uname != "لا يوجد" else ""
+                name_display = html.escape(fname) if fname else f"مستخدم {uid}"
+                uname_display = f" (@{html.escape(uname.replace('@', ''))})" if uname and uname != "لا يوجد" else ""
                 leaderboard_text += f"<blockquote>{medal} <b>{name_display}</b>{uname_display} — <b>{count}</b> زائر</blockquote>\n"
             leaderboard_text += "\n"
             
@@ -638,14 +640,18 @@ def handle_menu_callbacks(call):
         if not top_points:
             leaderboard_text += "<blockquote>• لا توجد نقاط مسجلة حتى الآن..</blockquote>"
         else:
+            medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
             for i, (uid, pts, fname, uname, b_icon) in enumerate(top_points):
                 medal = medals[i] if i < len(medals) else "🔹"
                 icon = b_icon if b_icon else "🏅"
-                name_display = fname if fname else f"مستخدم {uid}"
-                uname_display = f" ({uname})" if uname and uname != "لا يوجد" else ""
+                name_display = html.escape(fname) if fname else f"مستخدم {uid}"
+                uname_display = f" (@{html.escape(uname.replace('@', ''))})" if uname and uname != "لا يوجد" else ""
                 leaderboard_text += f"<blockquote>{medal} {icon} <b>{name_display}</b>{uname_display} — <b>{pts}</b> نقطة</blockquote>\n"
                 
-        bot.send_message(call.message.chat.id, leaderboard_text, parse_mode="HTML")
+        try:
+            bot.send_message(call.message.chat.id, leaderboard_text, parse_mode="HTML")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ حدث خطأ داخلي في عرض اللوحة: <code>{e}</code>", parse_mode="HTML")
         
     elif action == "points":
         bot.answer_callback_query(call.id)
@@ -676,6 +682,48 @@ def handle_menu_callbacks(call):
         bot.answer_callback_query(call.id)
         show_admin_panel(call.message.chat.id)
 
+@bot.callback_query_handler(func=lambda call: call.data == "report_weekly_supervisor")
+def handle_weekly_supervisor_report(call):
+    user_id = call.from_user.id
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    today = datetime.now()
+    dates_of_week = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
+    
+    cursor.execute("SELECT channel_id, channel_title FROM saved_channels WHERE user_id = ?", (user_id,))
+    channels = cursor.fetchall()
+    
+    if not channels:
+        bot.answer_callback_query(call.id, "❌ لم تقم بإضافة أي قنوات بعد.", show_alert=True)
+        conn.close()
+        return
+        
+    report_msg = "📊 <b>تقرير نشاط قنواتك لآخر 7 أيام:</b>\n\n"
+    has_activity = False
+    
+    for cid, ctitle in channels:
+        cursor.execute(f"SELECT date_str, posts_count FROM channel_daily_posts WHERE channel_id = ? AND date_str IN ({','.join(['?']*7)})", (cid, *dates_of_week))
+        activity = cursor.fetchall()
+        if activity:
+            has_activity = True
+            report_msg += f"📢 <b>قناة: {html.escape(ctitle)}</b>\n"
+            for date_str, p_count in activity:
+                report_msg += f"  • يوم <code>{date_str}</code>: تم نشر {p_count} بوست حضور\n"
+            
+            cursor.execute(f"SELECT SUM(count) FROM channel_daily_attendance WHERE channel_id = ? AND date_str IN ({','.join(['?']*7)})", (cid, *dates_of_week))
+            total_att = cursor.fetchone()[0] or 0
+            report_msg += f"  👥 <i>إجمالي الحضور الأسبوعي في القناة: <b>{total_att}</b></i>\n\n"
+    
+    conn.close()
+    
+    if not has_activity:
+        bot.answer_callback_query(call.id, "⚠️ لا يوجد نشاط لك في القنوات خلال آخر 7 أيام.", show_alert=True)
+        return
+        
+    bot.answer_callback_query(call.id, "✅ تم استخراج التقرير!")
+    bot.send_message(call.message.chat.id, report_msg, parse_mode="HTML")
+
 def show_channel_selection_menu(chat_id, user_id):
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -686,7 +734,7 @@ def show_channel_selection_menu(chat_id, user_id):
     if saved:
         markup = types.InlineKeyboardMarkup(row_width=1)
         for c_title, c_id in saved:
-            markup.add(create_colored_btn(f"📢 {c_title}", callback_data=f"select_chan_{c_id}", style="success"))
+            markup.add(create_colored_btn(f"📢 {html.escape(c_title)}", callback_data=f"select_chan_{c_id}", style="success"))
         markup.add(create_colored_btn("➕ إضافة قناة جديدة", callback_data="add_new_channel_prompt", style="primary"))
         bot.send_message(chat_id, "🚀 <b>اختر إحدى قنواتك المحفوظة أو أضف قناة جديدة للنشر:</b>\n\n<i>(ملاحظة: الحد الأقصى لبوستات الحضور هو بوستان فقط لكل قناة يومياً)</i>", parse_mode="HTML", reply_markup=markup)
     else:
@@ -1099,14 +1147,14 @@ def view_poll_detailed_stats(call):
     
     voters_str = ""
     if votes:
-        voters_lines = [f"<blockquote>{i+1}. <b>{v[0]}</b> ({v[1]})</blockquote>" for i, v in enumerate(votes)]
+        voters_lines = [f"<blockquote>{i+1}. <b>{html.escape(v[0])}</b> ({html.escape(v[1])})</blockquote>" for i, v in enumerate(votes)]
         voters_str = "\n".join(voters_lines)
     else:
         voters_str = "<blockquote>• لم يسجل أحد حضوره حتى الآن.</blockquote>"
         
     stats_detail_msg = (
         f"📊 <b>التحليلات المتقدمة وإحصائيات البوست:</b>\n\n"
-        f"<blockquote>• <b>عنوان البوست:</b> <code>{title}</code>\n"
+        f"<blockquote>• <b>عنوان البوست:</b> <code>{html.escape(title)}</code>\n"
         f"• <b>إجمالي التفاعلات (Total):</b> <code>{count}</code> تفاعل\n"
         f"• <b>الأشخاص الفريدون (Unique Reach):</b> <code>{unique_users_count}</code> مستخدم حقيقي\n"
         f"• <b>معدل التفاعل الفعلي (Engagement Rate):</b> <code>{attendance_rate}%</code></blockquote>\n\n"
@@ -1285,7 +1333,7 @@ def export_attendance_csv(call):
     bytes_io = io.BytesIO(output.getvalue().encode('utf-8-sig'))
     bytes_io.name = f"attendance_{poll_id}.csv"
     bot.answer_callback_query(call.id)
-    bot.send_document(call.message.chat.id, bytes_io, caption=f"📄 <b>كشف الحضور لبوست:</b>\n<code>{title}</code>", parse_mode="HTML")
+    bot.send_document(call.message.chat.id, bytes_io, caption=f"📄 <b>كشف الحضور لبوست:</b>\n<code>{html.escape(title)}</code>", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
 def admin_broadcast_prompt(call):
@@ -1369,6 +1417,41 @@ def send_weekly_report_to_admin():
     except Exception as e:
         print(f"Error sending weekly report: {e}")
 
+def send_weekly_report_to_supervisors():
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT user_id FROM saved_channels")
+    supervisors = cursor.fetchall()
+    
+    today = datetime.now()
+    dates_of_week = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7)]
+    
+    for (uid,) in supervisors:
+        cursor.execute("SELECT channel_id, channel_title FROM saved_channels WHERE user_id = ?", (uid,))
+        channels = cursor.fetchall()
+        report_msg = "📊 <b>تقرير نشاط قنواتك الأسبوعي (تلقائي):</b>\n\n"
+        has_activity = False
+        
+        for cid, ctitle in channels:
+            cursor.execute(f"SELECT date_str, posts_count FROM channel_daily_posts WHERE channel_id = ? AND date_str IN ({','.join(['?']*7)})", (cid, *dates_of_week))
+            activity = cursor.fetchall()
+            if activity:
+                has_activity = True
+                report_msg += f"📢 <b>قناة: {html.escape(ctitle)}</b>\n"
+                for date_str, p_count in activity:
+                    report_msg += f"  • يوم <code>{date_str}</code>: تم نشر {p_count} بوست حضور\n"
+                
+                cursor.execute(f"SELECT SUM(count) FROM channel_daily_attendance WHERE channel_id = ? AND date_str IN ({','.join(['?']*7)})", (cid, *dates_of_week))
+                total_att = cursor.fetchone()[0] or 0
+                report_msg += f"  👥 <i>إجمالي الحضور الأسبوعي في القناة: <b>{total_att}</b></i>\n\n"
+        
+        if has_activity:
+            try:
+                bot.send_message(uid, report_msg, parse_mode="HTML")
+            except:
+                pass
+    conn.close()
+
 @bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_broadcast_msg")
 def execute_broadcast(message):
     user_states.pop(ADMIN_ID, None)
@@ -1401,10 +1484,10 @@ def forward_support_message(message):
     user_states.pop(user_id, None)
     support_forward = (
         f"📩 <b>رسالة دعم فني جديدة:</b>\n\n"
-        f"<blockquote>• الاسم: {message.from_user.first_name}\n"
+        f"<blockquote>• الاسم: {html.escape(message.from_user.first_name)}\n"
         f"• الأيدي: <code>{user_id}</code>\n"
-        f"• المعرف: @{message.from_user.username if message.from_user.username else 'لا يوجد'}</blockquote>\n\n"
-        f"💬 <b>النص:</b>\n<blockquote>{message.text}</blockquote>"
+        f"• المعرف: @{html.escape(message.from_user.username) if message.from_user.username else 'لا يوجد'}</blockquote>\n\n"
+        f"💬 <b>النص:</b>\n<blockquote>{html.escape(message.text)}</blockquote>"
     )
     admin_markup = types.InlineKeyboardMarkup()
     admin_markup.add(create_colored_btn("💬 الرد على المستخدم", callback_data=f"reply_{user_id}", style="primary"))
@@ -1485,9 +1568,9 @@ def handle_channel_attendance(call):
     
     owner_notification = (
         f"🔔 <b>تسجيل حضور جديد في بوستك!</b>\n\n"
-        f"<blockquote>• البوست: {title}\n"
-        f"• المسجل: {fixed_name}\n"
-        f"• المعرف: <code>{uname_str}</code>\n"
+        f"<blockquote>• البوست: {html.escape(title)}\n"
+        f"• المسجل: {html.escape(fixed_name)}\n"
+        f"• المعرف: <code>{html.escape(uname_str)}</code>\n"
         f"• الأيدي: <code>{user.id}</code></blockquote>"
     )
     try:
@@ -1534,6 +1617,7 @@ def background_scheduler_loop():
             
             if now_dt.weekday() == 4 and now_dt.hour == 10 and now_dt.day != last_weekly_report_day:
                 send_weekly_report_to_admin()
+                send_weekly_report_to_supervisors()
                 last_weekly_report_day = now_dt.day
 
             conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
