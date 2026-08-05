@@ -71,7 +71,7 @@ def get_arabic_date_string():
     months = {
         '1': 'يناير', '2': 'فبراير', '3': 'مارس', '4': 'أبريل',
         '5': 'مايو', '6': 'يونيو', '7': 'يوليو', '8': 'أغسطس',
-        '9': 'سبتمبر', '10': 'كتوبر', '11': 'نوفمبر', '12': 'ديسمبر'
+        '9': 'سبتمبر', '10': 'أكتوبر', '11': 'نوفمبر', '12': 'ديسمبر'
     }
     now = datetime.now()
     d_name = days.get(now.strftime('%A'), '')
@@ -106,7 +106,7 @@ def get_main_inline_keyboard(user_id):
         
     return markup
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     user_id = message.from_user.id
     
@@ -118,7 +118,7 @@ def send_welcome(message):
     conn.commit()
 
     args = message.text.split()
-    if len(args) > 1:
+    if len(args) > 1 and message.text.startswith('/start'):
         try:
             owner_id = int(args[1])
             if owner_id != user_id:
@@ -149,6 +149,42 @@ def send_welcome(message):
         f"👇 **اختر ما تحتاجه من الأزرار الملونة أدناه:**"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
+
+@bot.message_handler(commands=['points', 'رصيدي'])
+def cmd_points(message):
+    user_id = message.from_user.id
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+    res = cursor.fetchone()
+    pts = res[0] if res else 0
+    conn.close()
+    bot.reply_to(message, f"🌟 **رصيدك الحالي:** `{pts}` نقطة.", parse_mode="Markdown")
+
+@bot.message_handler(commands=['admin'])
+def cmd_admin(message):
+    user_id = message.from_user.id
+    if user_id != ADMIN_ID:
+        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+        return
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM user_settings")
+    total_users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM polls")
+    total_polls = cursor.fetchone()[0]
+    conn.close()
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
+    
+    admin_panel = (
+        f"👑 **لوحة تحكم المشرف العامة:**\n\n"
+        f"> • **إجمالي المستخدمين المسجلين:** `{total_users}`\n"
+        f"> • **إجمالي بوستات الحضور:** `{total_polls}`\n"
+        f"> • **حالة السيرفر:** `يعمل بكفاءة عالية 🟢`"
+    )
+    bot.send_message(message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_callbacks(call):
@@ -292,7 +328,6 @@ def process_channel_posting(message):
     
     time_note = f"\n<i>⏱️ ينتهي هذا البوست تلقائياً بعد {duration} دقيقة.</i>" if duration > 0 else "\n<i>⏱️ البوست مفتوح طوال الوقت لتسجيل الحضور.</i>"
     
-    # استخدام تنسيق HTML لرسالة القناة لتمكين الاقتباس القابل للطي
     msg_content = f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:</i>{time_note}"
     if show_in_channel == 1:
         msg_content += "\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين (0):</b>\nلا توجد تسجيلات حتى الآن.</blockquote>"
@@ -351,8 +386,9 @@ def view_poll_detailed_stats(call):
         f"{voters_str}"
     )
     
-    markup = types.InlineKeyboardMarkup()
+    markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(create_colored_btn("📥 تحميل كشف الحضور (CSV)", callback_data=f"export_{poll_id}", style="primary"))
+    markup.add(create_colored_btn("🗑️ حذف البوست نهائياً", callback_data=f"delete_poll_{poll_id}", style="danger"))
     markup.add(create_colored_btn("🔙 العودة للقائمة", callback_data="menu_stats", style="success"))
     
     bot.answer_callback_query(call.id)
@@ -362,6 +398,39 @@ def view_poll_detailed_stats(call):
         text=stats_detail_msg,
         parse_mode="Markdown",
         reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_poll_"))
+def delete_poll_callback(call):
+    poll_id = call.data.replace("delete_poll_", "")
+    user_id = call.from_user.id
+    
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_id, message_id FROM polls WHERE poll_id = ? AND owner_id = ?", (poll_id, user_id))
+    poll = cursor.fetchone()
+    if not poll:
+        bot.answer_callback_query(call.id, "❌ البوست غير موجود.", show_alert=True)
+        conn.close()
+        return
+        
+    channel_id, message_id = poll
+    try:
+        bot.delete_message(chat_id=channel_id, message_id=message_id)
+    except Exception:
+        pass
+        
+    cursor.execute("DELETE FROM polls WHERE poll_id = ?", (poll_id,))
+    cursor.execute("DELETE FROM poll_votes WHERE poll_id = ?", (poll_id,))
+    conn.commit()
+    conn.close()
+    
+    bot.answer_callback_query(call.id, "✅ تم حذف البوست بنجاح!", show_alert=True)
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="🗑️ **تم حذف البوست وسجله بنجاح.**",
+        parse_mode="Markdown"
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "wizard_title_type")
