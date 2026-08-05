@@ -160,25 +160,12 @@ def init_db():
                         key TEXT PRIMARY KEY,
                         value TEXT
                     )''')
-
-    cursor.execute('''CREATE TABLE IF NOT EXISTS custom_texts (
-                        key TEXT PRIMARY KEY,
-                        value TEXT
-                    )''')
     
     conn.commit()
     conn.close()
 
 init_db()
 user_states = {}
-
-def get_custom_text(key, default_val):
-    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("SELECT value FROM custom_texts WHERE key = ?", (key,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row and row[0] is not None else default_val
 
 def get_arabic_date_string():
     days = {
@@ -258,28 +245,28 @@ def send_subscription_required_message(chat_id):
 
 def get_main_inline_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_settings = create_colored_btn(get_custom_text("btn_settings", "⚙️ إعدادات البوست"), callback_data="menu_settings", style="primary")
-    btn_share = create_colored_btn(get_custom_text("btn_share", "🚀 نشر بوست جديد بالقناة"), callback_data="menu_share", style="primary")
+    btn_settings = create_colored_btn("⚙️ إعدادات البوست", callback_data="menu_settings", style="primary")
+    btn_share = create_colored_btn("🚀 نشر بوست جديد بالقناة", callback_data="menu_share", style="primary")
     markup.add(btn_settings, btn_share)
     
-    btn_q_create = create_colored_btn(get_custom_text("btn_q_create", "❓ طرح سؤال تفاعلي"), callback_data="menu_create_question", style="success")
-    btn_coupon_redeem = create_colored_btn(get_custom_text("btn_coupon_redeem", "🎁 شحن كوبون هدية"), callback_data="menu_redeem_prompt", style="success")
+    btn_q_create = create_colored_btn("❓ طرح سؤال تفاعلي", callback_data="menu_create_question", style="success")
+    btn_coupon_redeem = create_colored_btn("🎁 شحن كوبون هدية", callback_data="menu_redeem_prompt", style="success")
     markup.add(btn_q_create, btn_coupon_redeem)
 
-    btn_sched = create_colored_btn(get_custom_text("btn_sched", "⏰ جدولة بوست/سؤال"), callback_data="menu_schedule_prompt", style="primary")
-    btn_stats = create_colored_btn(get_custom_text("btn_stats", "📊 إحصائيات التحليل المتقدم"), callback_data="menu_stats", style="success")
+    btn_sched = create_colored_btn("⏰ جدولة بوست/سؤال", callback_data="menu_schedule_prompt", style="primary")
+    btn_stats = create_colored_btn("📊 إحصائيات التحليل المتقدم", callback_data="menu_stats", style="success")
     markup.add(btn_sched, btn_stats)
 
-    btn_top = create_colored_btn(get_custom_text("btn_top", "🏆 قائمة المتصدرين"), callback_data="menu_leaderboard", style="success")
-    btn_points = create_colored_btn(get_custom_text("btn_points", "🌟 لوحة النقاط"), callback_data="menu_points", style="success")
+    btn_top = create_colored_btn("🏆 قائمة المتصدرين", callback_data="menu_leaderboard", style="success")
+    btn_points = create_colored_btn("🌟 لوحة النقاط", callback_data="menu_points", style="success")
     markup.add(btn_top, btn_points)
     
-    btn_profile = create_colored_btn(get_custom_text("btn_profile", "👤 الملف الشخصي (/profile)"), callback_data="menu_profile", style="primary")
-    btn_support = create_colored_btn(get_custom_text("btn_support", "🛠️ الدعم والمساعدة"), callback_data="menu_support", style="success")
+    btn_profile = create_colored_btn("👤 الملف الشخصي (/profile)", callback_data="menu_profile", style="primary")
+    btn_support = create_colored_btn("🛠️ الدعم والمساعدة", callback_data="menu_support", style="success")
     markup.add(btn_profile, btn_support)
     
     if user_id == ADMIN_ID:
-        btn_admin = create_colored_btn(get_custom_text("btn_admin", "👑 لوحة تحكم المشرف"), callback_data="menu_admin", style="danger")
+        btn_admin = create_colored_btn("👑 لوحة تحكم المشرف", callback_data="menu_admin", style="danger")
         markup.add(btn_admin)
         
     return markup
@@ -490,7 +477,6 @@ def show_admin_panel(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
     markup.add(create_colored_btn("📢 تعيين / تعديل قناة الاشتراك الإجباري", callback_data="admin_set_forced_channel", style="primary"))
-    markup.add(create_colored_btn("🎛️ تخصيص الأزرار والإيموجيز (مميز)", callback_data="admin_custom_texts", style="success"))
     markup.add(create_colored_btn("📊 إرسال التقرير الأسبوعي الفوري", callback_data="admin_send_weekly_report", style="success"))
     markup.add(create_colored_btn("👥 إدارة مصممي الأسئلة", callback_data="admin_manage_q_creators", style="primary"))
     
@@ -503,73 +489,6 @@ def show_admin_panel(chat_id):
         f"• <b>أوامر النظام:</b> استخدم <code>/backup</code> أو <code>/restore</code>.</blockquote>"
     )
     bot.send_message(chat_id, admin_panel, parse_mode="HTML", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data == "admin_custom_texts")
-def admin_custom_texts_menu(call):
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
-        return
-    bot.answer_callback_query(call.id)
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
-    buttons_list = [
-        ("⚙️ إعدادات البوست", "btn_settings"),
-        ("🚀 نشر بوست جديد بالقناة", "btn_share"),
-        ("❓ طرح سؤال تفاعلي", "btn_q_create"),
-        ("🎁 شحن كوبون هدية", "btn_coupon_redeem"),
-        ("⏰ جدولة بوست/سؤال", "btn_sched"),
-        ("📊 إحصائيات التحليل المتقدم", "btn_stats"),
-        ("🏆 قائمة المتصدرين", "btn_top"),
-        ("🌟 لوحة النقاط", "btn_points"),
-        ("👤 الملف الشخصي", "btn_profile"),
-        ("🛠️ الدعم والمساعدة", "btn_support"),
-        ("✅ زر تسجيل الحضور", "btn_attend"),
-        ("👑 لوحة تحكم المشرف", "btn_admin")
-    ]
-    
-    for title, key in buttons_list:
-        current_val = get_custom_text(key, title)
-        markup.add(create_colored_btn(f"تعديل: {current_val[:22]}", callback_data=f"edit_text_{key}", style="primary"))
-    
-    markup.add(create_colored_btn("🔙 العودة لوحة المشرف", callback_data="menu_admin", style="danger"))
-    
-    bot.edit_message_text(
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        text="🎛️ <b>لوحة تخصيص الأزرار والإيموجيز المميزة:</b>\n\n<blockquote>اختر الزر أدناه لإرسال الإيموجي أو النص الجديد وسيتحدث تلقائياً:</blockquote>",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_text_"))
-def edit_text_prompt(call):
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
-        return
-    key = call.data.replace("edit_text_", "")
-    user_states[ADMIN_ID] = {"step": "waiting_custom_text", "key": key}
-    bot.answer_callback_query(call.id)
-    bot.send_message(
-        ADMIN_ID,
-        f"✍️ <b>أرسل الآن النص الجديد أو الإيموجي المميز (Premium Emoji) لهذا الزر (العنصر: <code>{key}</code>):</b>\n\n"
-        f"<i>ملاحظة: قم بنسخ ولصق الإيموجي المميز مع النص الذي تريده، وسيقوم البوت باعتماده مباشرةً وتحديثه لدى جميع المستخدمين!</i>",
-        parse_mode="HTML"
-    )
-
-@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and isinstance(user_states.get(ADMIN_ID), dict) and user_states.get(ADMIN_ID).get("step") == "waiting_custom_text")
-def save_custom_text_input(message):
-    state_data = user_states.pop(ADMIN_ID, None)
-    key = state_data["key"]
-    new_text = message.text.strip()
-    
-    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO custom_texts (key, value) VALUES (?, ?)", (key, new_text))
-    conn.commit()
-    conn.close()
-    
-    bot.reply_to(message, f"✅ <b>تم تحديث النص/الإيموجي بنجاح!</b>\nالنص الجديد: {new_text}", parse_mode="HTML")
-    show_admin_panel(message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_set_forced_channel")
 def admin_set_forced_channel_prompt(call):
@@ -759,9 +678,47 @@ def handle_menu_callbacks(call):
     elif action == "admin":
         if user_id != ADMIN_ID:
             bot.answer_callback_query(call.id, "هذا الزر للمشرف فقط ⛔", show_alert=True)
+            # --- معالج الضغط على زر الرد من قبل المطور ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith("reply_"))
+def admin_start_reply_user(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "هذا الزر للمشرف فقط ⛔", show_alert=True)
+        return
+        
+    target_user_id = call.data.replace("reply_", "")
+    # تخزين حالة المطور بأنه في وضع الرد على المستخدم المحدد
+    user_states[ADMIN_ID] = {"step": "waiting_admin_reply", "target_user_id": int(target_user_id)}
+    
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        ADMIN_ID,
+        f"💬 <b>أرسل الآن ردك للمستخدم (الأيدي: <code>{target_user_id}</code>):</b>\n\n"
+        f"<i>اكتب النص مباشرة وسيتم إرساله إليه فوراً.</i>",
+        parse_mode="HTML"
+    )
+
+# --- معالج استقبال نص الرد من المطور وإرساله للعميل ---
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[message.from_user.id].get("step") == "waiting_admin_reply")
+def send_admin_reply_to_user(message):
+    state_data = user_states.pop(ADMIN_ID, None)
+    target_user_id = state_data.get("target_user_id")
+    admin_reply_text = message.text.strip()
+    
+    try:
+        # إرسال رد المطور إلى العميل
+        client_msg = (
+            f"📬 <b>رد جديد من إدارة البوت (المطور):</b>\n\n"
+            f"<blockquote>{html.escape(admin_reply_text)}</blockquote>"
+        )
+        bot.send_message(target_user_id, client_msg, parse_mode="HTML")
+        bot.reply_to(message, f"✅ <b>تم إرسال الرد بنجاح إلى المستخدم (<code>{target_user_id}</code>)!</b>", parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, f"❌ <b>فشل إرسال الرد للمستخدم:</b>\n<code>{e}</code>\n\n<i>قد يكون المستخدم قد حظر البوت.</i>", parse_mode="HTML")
+
             return
         bot.answer_callback_query(call.id)
-        show_admin_panel(call.message.chat.id)
+  
+    show_admin_panel(call.message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "report_weekly_supervisor")
 def handle_weekly_supervisor_report(call):
@@ -885,8 +842,7 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
     end_time = (current_time + (duration * 60)) if duration > 0 else 0
     
     keyboard = types.InlineKeyboardMarkup()
-    attend_btn_text = get_custom_text("btn_attend", "✅ تسجيل الحضور")
-    keyboard.add(create_colored_btn(f"{attend_btn_text} [0]", callback_data=f"attend_{poll_id}", style="success"))
+    keyboard.add(create_colored_btn("✅ تسجيل الحضور [0]", callback_data=f"attend_{poll_id}", style="success"))
     keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
     
     time_note = f"\n<i>⏱️ ينتهي هذا البوست تلقائياً بعد {duration} دقيقة.</i>" if duration > 0 else "\n<i>⏱️ البوست مفتوح طوال الوقت لتسجيل الحضور.</i>"
@@ -1662,8 +1618,7 @@ def handle_channel_attendance(call):
         
     try:
         new_keyboard = types.InlineKeyboardMarkup()
-        attend_btn_text = get_custom_text("btn_attend", "✅ تسجيل الحضور")
-        new_keyboard.add(create_colored_btn(f"{attend_btn_text} [{new_count}]", callback_data=f"attend_{poll_id}", style="success"))
+        new_keyboard.add(create_colored_btn(f"✅ تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}", style="success"))
         new_keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
         voters_list_str = ""
         if show_in_channel == 1:
@@ -1712,8 +1667,7 @@ def background_scheduler_loop():
                 try:
                     poll_id = f"poll_sched_{user_id}_{int(time.time())}"
                     keyboard = types.InlineKeyboardMarkup()
-                    attend_btn_text = get_custom_text("btn_attend", "✅ تسجيل الحضور")
-                    keyboard.add(create_colored_btn(f"{attend_btn_text} [0]", callback_data=f"attend_{poll_id}", style="success"))
+                    keyboard.add(create_colored_btn("✅ تسجيل الحضور [0]", callback_data=f"attend_{poll_id}", style="success"))
                     keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
                     
                     msg_content = (
@@ -1749,7 +1703,7 @@ def webhook_listener():
 
 @app.route("/")
 def index():
-    return "Bot is running perfectly with advanced analytics, badges, scheduling, speed races, automated weekly reports, forced subscription and custom buttons/emojis management!", 200
+    return "Bot is running perfectly with advanced analytics, badges, scheduling, speed races, automated weekly reports and forced subscription!", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
