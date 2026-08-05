@@ -58,7 +58,6 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS user_referral_logs (owner_id INTEGER, visitor_id INTEGER, PRIMARY KEY (owner_id, visitor_id))')
     cursor.execute('CREATE TABLE IF NOT EXISTS user_points (user_id INTEGER PRIMARY KEY, points INTEGER DEFAULT 0)')
     
-    # جداول الكوبونات والهدايا الجديدة
     cursor.execute('''CREATE TABLE IF NOT EXISTS coupons (
                         code TEXT PRIMARY KEY,
                         points INTEGER,
@@ -74,7 +73,6 @@ def init_db():
                         PRIMARY KEY (code, user_id)
                     )''')
     
-    # جداول الأسئلة التفاعلية المطورة
     cursor.execute('''CREATE TABLE IF NOT EXISTS questions (
                         question_id TEXT PRIMARY KEY,
                         owner_id INTEGER,
@@ -188,15 +186,15 @@ def send_welcome(message):
 
     markup = get_main_inline_keyboard(user_id)
     welcome_text = (
-        f"✨ **مرحباً بك عزيزي {message.from_user.first_name}**\n\n"
-        f"> 📌 *أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، وسيقوم البوت بنشرها وتحديثها فوراً بالقناة.*\n\n"
-        f"⚠️ **تنبيه هام جداً:** ارفع البوت **مشرفاً (Admin)** في قناتك مع صلاحية (تعديل رسائل الآخرين وحذفها) لكي يعمل التحديث الفوري.\n\n"
-        f"🔗 **رابط دعوتك الشخصي:**\n`https://t.me/{bot.get_me().username}?start={user_id}`\n\n"
-        f"📊 **إجمالي زوار رابطك:** `{total_visits}` شخص\n"
-        f"🌟 **رصيدك من النقاط:** `{user_points}` نقطة\n\n"
-        f"👇 **اختر ما تحتاجه من الأزرار الملونة أدناه:**"
+        f"✨ <b>مرحباً بك عزيزي {message.from_user.first_name}</b>\n\n"
+        f"<blockquote>📌 <i>أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، وسيقوم البوت بنشرها وتحديثها فوراً بالقناة.</i></blockquote>\n\n"
+        f"⚠️ <b>تنبيه هام جداً:</b> ارفع البوت <b>مشرفاً (Admin)</b> في قناتك مع صلاحية (تعديل رسائل الآخرين وحذفها) لكي يعمل التحديث الفوري.\n\n"
+        f"🔗 <b>رابط دعوتك الشخصي:</b>\n<code>https://t.me/{bot.get_me().username}?start={user_id}</code>\n\n"
+        f"📊 <b>إجمالي زوار رابطك:</b> <code>{total_visits}</code> شخص\n"
+        f"🌟 <b>رصيدك من النقاط:</b> <code>{user_points}</code> نقطة\n\n"
+        f"👇 <b>اختر ما تحتاجه من الأزرار الملونة أدناه:</b>"
     )
-    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(message.chat.id, welcome_text, parse_mode="HTML", reply_markup=markup)
 
 @bot.message_handler(commands=['points', 'رصيدي'])
 def cmd_points(message):
@@ -207,9 +205,8 @@ def cmd_points(message):
     res = cursor.fetchone()
     pts = res[0] if res else 0
     conn.close()
-    bot.reply_to(message, f"🌟 **رصيدك الحالي:** `{pts}` نقطة.", parse_mode="Markdown")
+    bot.reply_to(message, f"🌟 <b>رصيدك الحالي:</b> <code>{pts}</code> نقطة.", parse_mode="HTML")
 
-# ميزة الملف الشخصي الشامل (/profile)
 @bot.message_handler(commands=['profile'])
 def cmd_profile(message):
     user_id = message.from_user.id
@@ -219,53 +216,59 @@ def show_profile_data(chat_id, user_id):
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
-    # الرصيد والنقاط
     cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
     p_res = cursor.fetchone()
     pts = p_res[0] if p_res else 0
     
-    # حساب الرتبة بناء على النقاط
     cursor.execute("SELECT COUNT(*) FROM user_points WHERE points > ?", (pts,))
     higher_users = cursor.fetchone()[0]
     rank = higher_users + 1
     
-    # سجل الإجابات على الأسئلة
     cursor.execute("SELECT COUNT(*), SUM(is_correct) FROM question_answers WHERE user_id = ?", (user_id,))
     q_res = cursor.fetchone()
     total_q = q_res[0] if q_res and q_res[0] else 0
     correct_q = q_res[1] if q_res and q_res[1] else 0
     accuracy = round((correct_q / total_q) * 100, 1) if total_q > 0 else 0.0
     
-    # الأنشطة والقنوات (بوستات الحضور والأسئلة المتفاعلة فيها)
-    cursor.execute("SELECT channel_id FROM polls WHERE owner_id = ?", (user_id,))
-    channels = [row[0] for row in cursor.fetchall()]
+    # جلب أسماء القنوات الحقيقية عبر تيليجرام
+    cursor.execute("SELECT DISTINCT channel_id FROM polls WHERE owner_id = ?", (user_id,))
+    poll_channels = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT DISTINCT channel_id FROM questions WHERE owner_id = ?", (user_id,))
+    q_channels = [row[0] for row in cursor.fetchall()]
     
-    # الكوبونات والإنجازات السابقة
+    all_channel_ids = list(set(poll_channels + q_channels))
+    channel_names = []
+    for cid in all_channel_ids:
+        try:
+            chat_info = bot.get_chat(cid)
+            channel_names.append(chat_info.title or str(cid))
+        except Exception:
+            channel_names.append(str(cid))
+            
     cursor.execute("SELECT code FROM coupon_uses WHERE user_id = ?", (user_id,))
     used_coupons = [row[0] for row in cursor.fetchall()]
     
     conn.close()
     
     coupons_str = ", ".join(used_coupons) if used_coupons else "لا توجد"
-    channels_str = f"إجمالي {len(set(channels))} قناة/مجموعة" if channels else "لا توجد قنوات مسجلة"
+    channels_str = ", ".join(channel_names) if channel_names else "لا توجد قنوات مسجلة"
     
     profile_text = (
-        f"👤 **لوحة الملف الشخصي الإحصائي الشامل:**\n\n"
-        f"🌟 **الرصيد والرتبة:**\n"
-        f"> • رصيد النقاط: `{pts}` نقطة\n"
-        f"> • الرتبة الحالية: المركز `{rank}` عالمياً\n\n"
-        f"📊 **سجل إجابات الأسئلة التفاعلية:**\n"
-        f"> • إجمالي الأسئلة المشارك بها: `{total_q}`\n"
-        f"> • الإجابات الصحيحة: `{correct_q}`\n"
-        f"> • نسبة الدقة المئوية: `{accuracy}%`\n\n"
-        f"🌐 **النشاط والقنوات:**\n"
-        f"> • القنوات والمجموعات المتفاعل ضمنها: `{channels_str}`\n\n"
-        f"🎁 **سجل الإنجازات والهدايا:**\n"
-        f"> • الكوبونات المستخدمة مسبقاً: `{coupons_str}`"
+        f"👤 <b>لوحة الملف الشخصي الإحصائي الشامل:</b>\n\n"
+        f"🌟 <b>الرصيد والرتبة:</b>\n"
+        f"<blockquote>• رصيد النقاط: <code>{pts}</code> نقطة\n"
+        f"• الرتبة الحالية: المركز <code>{rank}</code> عالمياً</blockquote>\n\n"
+        f"📊 <b>سجل إجابات الأسئلة التفاعلية:</b>\n"
+        f"<blockquote>• إجمالي الأسئلة المشارك بها: <code>{total_q}</code>\n"
+        f"• الإجابات الصحيحة: <code>{correct_q}</code>\n"
+        f"• نسبة الدقة المئوية: <code>{accuracy}%</code></blockquote>\n\n"
+        f"🌐 <b>القنوات والمجموعات المسجلة:</b>\n"
+        f"<blockquote>{channels_str}</blockquote>\n\n"
+        f"🎁 <b>سجل الإنجازات والهدايا:</b>\n"
+        f"<blockquote>• الكوبونات المستخدمة مسبقاً: {coupons_str}</blockquote>"
     )
-    bot.send_message(chat_id, profile_text, parse_mode="Markdown")
+    bot.send_message(chat_id, profile_text, parse_mode="HTML")
 
-# نظام الكوبونات والهدايا (أوامر المشرفين)
 @bot.message_handler(commands=['createcode'])
 def cmd_create_code(message):
     if message.from_user.id != ADMIN_ID:
@@ -274,7 +277,7 @@ def cmd_create_code(message):
     
     args = message.text.split()
     if len(args) < 4:
-        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n`/createcode [الكود] [النقاط] [عدد_المرات]`\nمثال: `/createcode WELCOME 50 20`", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n<code>/createcode [الكود] [النقاط] [عدد_المرات]</code>\nمثال: <code>/createcode WELCOME 50 20</code>", parse_mode="HTML")
         return
     
     code = args[1].strip()
@@ -291,7 +294,7 @@ def cmd_create_code(message):
         cursor.execute("INSERT INTO coupons (code, points, max_uses, uses_count, expires_at, is_closed) VALUES (?, ?, ?, 0, 0, 0)", 
                        (code, points, max_uses))
         conn.commit()
-        bot.reply_to(message, f"✅ **تم إنشاء الكوبون بنجاح!**\n\n> • الكود: `{code}`\n> • النقاط الممنوحة: `{points}`\n> • عدد مرات الاستخدام المتاحة: `{max_uses}`", parse_mode="Markdown")
+        bot.reply_to(message, f"✅ <b>تم إنشاء الكوبون بنجاح!</b>\n\n<blockquote>• الكود: <code>{code}</code>\n• النقاط الممنوحة: <code>{points}</code>\n• عدد مرات الاستخدام المتاحة: <code>{max_uses}</code></blockquote>", parse_mode="HTML")
     except sqlite3.IntegrityError:
         bot.reply_to(message, "❌ هذا الكود موجود مسبقاً، اختر كوداً آخر.")
     finally:
@@ -305,7 +308,7 @@ def cmd_close_code(message):
     
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n`/closecode [الكود]`", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n<code>/closecode [الكود]</code>", parse_mode="HTML")
         return
     
     code = args[1].strip()
@@ -314,7 +317,7 @@ def cmd_close_code(message):
     cursor.execute("UPDATE coupons SET is_closed = 1 WHERE code = ?", (code,))
     if cursor.rowcount > 0:
         conn.commit()
-        bot.reply_to(message, f"🔒 **تم إغلاق الكود `{code}` يدوياً بنجاح.**", parse_mode="Markdown")
+        bot.reply_to(message, f"🔒 <b>تم إغلاق الكود <code>{code}</code> يدوياً بنجاح.</b>", parse_mode="HTML")
     else:
         bot.reply_to(message, "❌ هذا الكود غير موجود.")
     conn.close()
@@ -323,7 +326,7 @@ def cmd_close_code(message):
 def cmd_redeem(message):
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n`/redeem [الكود]`\nأو أرسل الكود مباشرة.", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n<code>/redeem [الكود]</code>\nأو أرسل الكود مباشرة.", parse_mode="HTML")
         return
     code = args[1].strip()
     process_coupon_redemption(message, code)
@@ -354,14 +357,13 @@ def process_coupon_redemption(message, code):
         conn.close()
         return
         
-    # تنفيذ الشحن
     cursor.execute("INSERT INTO coupon_uses (code, user_id) VALUES (?, ?)", (code, user_id))
     cursor.execute("UPDATE coupons SET uses_count = uses_count + 1 WHERE code = ?", (code,))
     cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?", (user_id, points, points))
     conn.commit()
     conn.close()
     
-    bot.reply_to(message, f"🎉 **مبروك! تم شحن الكود بنجاح.**\n\n> • حصلت على: **{points} نقطة** رصيد جديد.", parse_mode="Markdown")
+    bot.reply_to(message, f"🎉 <b>مبروك! تم شحن الكود بنجاح.</b>\n\n<blockquote>• حصلت على: <b>{points} نقطة</b> رصيد جديد.</blockquote>", parse_mode="HTML")
 
 @bot.message_handler(commands=['backup'])
 def backup_database(message):
@@ -412,13 +414,13 @@ def cmd_admin(message):
     markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
     
     admin_panel = (
-        f"👑 **لوحة تحكم المشرف العامة:**\n\n"
-        f"> • **إجمالي المستخدمين المسجلين:** `{total_users}`\n"
-        f"> • **إجمالي بوستات الحضور:** `{total_polls}`\n"
-        f"> • **إجمالي الكوبونات النشطة:** `{total_coupons}`\n"
-        f"> • **حالة السيرفر:** `يعمل بكفاءة عالية 🟢`"
+        f"👑 <b>لوحة تحكم المشرف العامة:</b>\n\n"
+        f"<blockquote>• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code>\n"
+        f"• <b>إجمالي بوستات الحضور:</b> <code>{total_polls}</code>\n"
+        f"• <b>إجمالي الكوبونات النشطة:</b> <code>{total_coupons}</code>\n"
+        f"• <b>حالة السيرفر:</b> يعمل بكفاءة عالية 🟢</blockquote>"
     )
-    bot.send_message(message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(message.chat.id, admin_panel, parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_callbacks(call):
@@ -431,16 +433,16 @@ def handle_menu_callbacks(call):
         markup.add(create_colored_btn("⏱️ ضبط مدة البوست الافتراضية", callback_data="set_duration", style="primary"))
         markup.add(create_colored_btn("👁️ ضبط خيار عرض القائمة بالرسالة", callback_data="set_display_mode", style="primary"))
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "⚙️ **إعدادات بوستات الحضور:**\n\n> *اختر الخيار الذي تريد ضبطه بدقة:*", parse_mode="Markdown", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "⚙️ <b>إعدادات بوستات الحضور:</b>\n\n<blockquote>اختر الخيار الذي تريد ضبطه بدقة:</blockquote>", parse_mode="HTML", reply_markup=markup)
     
     elif action == "share":
         bot.answer_callback_query(call.id)
         user_states[user_id] = "waiting_channel_username"
         bot.send_message(
             call.message.chat.id, 
-            "🚀 **نشر بوست الحضور مباشرة بواسطة البوت:**\n\n"
-            "> *أرسل الآن معرف قناتك أو مجموعة (مثال: `@MyChannel` أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.*", 
-            parse_mode="Markdown"
+            "🚀 <b>نشر بوست الحضور مباشرة بواسطة البوت:</b>\n\n"
+            "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.</blockquote>", 
+            parse_mode="HTML"
         )
     
     elif action == "create_question":
@@ -448,15 +450,15 @@ def handle_menu_callbacks(call):
         user_states[user_id] = "waiting_q_text"
         bot.send_message(
             call.message.chat.id,
-            "❓ **نظام الأسئلة التفاعلية المطوّر:**\n\n"
-            "> *أرسل الآن نص السؤال التفاعلي الذي تريد طرحه (مثال: عاصمة ليبيا هي؟):*",
-            parse_mode="Markdown"
+            "❓ <b>نظام الأسئلة التفاعلية المطوّر:</b>\n\n"
+            "<blockquote>أرسل الآن نص السؤال التفاعلي الذي تريد طرحه (مثال: عاصمة ليبيا هي؟):</blockquote>",
+            parse_mode="HTML"
         )
     
     elif action == "redeem_prompt":
         bot.answer_callback_query(call.id)
         user_states[user_id] = "waiting_coupon_input"
-        bot.send_message(call.message.chat.id, "🎁 *أرسل الآن كود الكوبون أو الهدية لشحنه ورصيدك فوراً:*", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "🎁 <i>أرسل الآن كود الكوبون أو الهدية لشحنه ورصيدك فوراً:</i>", parse_mode="HTML")
         
     elif action == "profile":
         bot.answer_callback_query(call.id)
@@ -471,47 +473,65 @@ def handle_menu_callbacks(call):
         conn.close()
         
         if not user_polls:
-            bot.send_message(call.message.chat.id, "📊 **إحصائيات الحضور اليومية:**\n\n> ⚠️ *لا توجد بوستات منشأة حتى الآن.*", parse_mode="Markdown")
+            bot.send_message(call.message.chat.id, "📊 <b>إحصائيات الحضور اليومية:</b>\n\n<blockquote>⚠️ لا توجد بوستات منشأة حتى الآن.</blockquote>", parse_mode="HTML")
             return
             
-        stats_text = "📊 **سجل إحصائيات الحضور اليومية لبوستاتك:**\n\n> *اختر البوست من الأزرار أدناه لعرض الحاضرين لكل يوم مباشرة وبدون ملفات:*"
+        stats_text = "📊 <b>سجل إحصائيات الحضور اليومية لبوستاتك:</b>\n\n<blockquote>اختر البوست من الأزرار أدناه لعرض الحاضرين لكل يوم مباشرة وبدون ملفات:</blockquote>"
         markup = types.InlineKeyboardMarkup(row_width=1)
         for pid, title, cnt in user_polls:
             short_title = title[:25] + "..." if len(title) > 25 else title
             markup.add(create_colored_btn(f"📌 {short_title} (حاضر: {cnt})", callback_data=f"view_stats_{pid}", style="success"))
             
-        bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown", reply_markup=markup)
+        bot.send_message(call.message.chat.id, stats_text, parse_mode="HTML", reply_markup=markup)
     
     elif action == "leaderboard":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute("SELECT owner_id, visits_count FROM referrals ORDER BY visits_count DESC LIMIT 5")
+        
+        # جلب أكثر المستخدمين جلباً للزوار مع أسمائهم الحقيقية
+        cursor.execute("""
+            SELECT r.owner_id, r.visits_count, p.full_name, p.username 
+            FROM referrals r 
+            LEFT JOIN user_profiles p ON r.owner_id = p.user_id 
+            ORDER BY r.visits_count DESC LIMIT 5
+        """)
         top_users = cursor.fetchall()
-        cursor.execute("SELECT user_id, points FROM user_points ORDER BY points DESC LIMIT 5")
+        
+        # جلب أكثر الأعضاء تفاعلاً ونقاطاً مع أسمائهم الحقيقية
+        cursor.execute("""
+            SELECT tp.user_id, tp.points, p.full_name, p.username 
+            FROM user_points tp 
+            LEFT JOIN user_profiles p ON tp.user_id = p.user_id 
+            ORDER BY tp.points DESC LIMIT 5
+        """)
         top_points = cursor.fetchall()
         conn.close()
         
-        leaderboard_text = "🏆 **قوائم المتصدرين في البوت:**\n\n"
-        leaderboard_text += "🔗 **أكثر المستخدمين جلباً للزوار:**\n"
+        leaderboard_text = "🏆 <b>قوائم المتصدرين في البوت:</b>\n\n"
+        leaderboard_text += "🔗 <b>أكثر المستخدمين جلباً للزوار:</b>\n"
         if not top_users:
-            leaderboard_text += "> *لا توجد بيانات حتى الآن..*\n\n"
+            leaderboard_text += "<blockquote>• لا توجد بيانات حتى الآن..</blockquote>\n\n"
         else:
             medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-            for i, (uid, count) in enumerate(top_users):
+            for i, (uid, count, fname, uname) in enumerate(top_users):
                 medal = medals[i] if i < len(medals) else "🔹"
-                leaderboard_text += f"> {medal} أيدي: `{uid}` — **{count}** زائر\n"
+                name_display = fname if fname else f"مستخدم {uid}"
+                uname_display = f" ({uname})" if uname and uname != "لا يوجد" else ""
+                leaderboard_text += f"<blockquote>{medal} <b>{name_display}</b>{uname_display} — <b>{count}</b> زائر</blockquote>\n"
             leaderboard_text += "\n"
             
-        leaderboard_text += "🌟 **أكثر الأعضاء تفاعلاً ونقاطاً:**\n"
+        leaderboard_text += "🌟 <b>أكثر الأعضاء تفاعلاً ونقاطاً:</b>\n"
         if not top_points:
-            leaderboard_text += "> *لا توجد نقاط مسجلة حتى الآن..*"
+            leaderboard_text += "<blockquote>• لا توجد نقاط مسجلة حتى الآن..</blockquote>"
         else:
-            for i, (uid, pts) in enumerate(top_points):
+            for i, (uid, pts, fname, uname) in enumerate(top_points):
                 medal = medals[i] if i < len(medals) else "🔹"
-                leaderboard_text += f"> {medal} أيدي: `{uid}` — **{pts}** نقطة\n"
+                name_display = fname if fname else f"مستخدم {uid}"
+                uname_display = f" ({uname})" if uname and uname != "لا يوجد" else ""
+                leaderboard_text += f"<blockquote>{medal} <b>{name_display}</b>{uname_display} — <b>{pts}</b> نقطة</blockquote>\n"
                 
-        bot.send_message(call.message.chat.id, leaderboard_text, parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, leaderboard_text, parse_mode="HTML")
         
     elif action == "points":
         bot.answer_callback_query(call.id)
@@ -522,16 +542,16 @@ def handle_menu_callbacks(call):
         pts = res[0] if res else 0
         conn.close()
         points_msg = (
-            f"🌟 **نظام النقاط والمكافآت:**\n\n"
-            f"> • رصيدك الحالي هو: **{pts} نقطة**\n"
-            f"> • تحصل على النقاط تلقائياً كلما قمت بتسجيل حضورك أو الإجابة الصحيحة على الأسئلة التفاعلية!\n"
+            f"🌟 <b>نظام النقاط والمكافآت:</b>\n\n"
+            f"<blockquote>• رصيدك الحالي هو: <b>{pts} نقطة</b>\n"
+            f"• تحصل على النقاط تلقائياً كلما قمت بتسجيل حضورك أو الإجابة الصحيحة على الأسئلة التفاعلية!</blockquote>"
         )
-        bot.send_message(call.message.chat.id, points_msg, parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, points_msg, parse_mode="HTML")
     
     elif action == "support":
         bot.answer_callback_query(call.id)
         user_states[user_id] = "waiting_support_msg"
-        bot.send_message(call.message.chat.id, "💬 *أرسل رسالتك أو استفسارك الآن، وسيتم تحويله مباشرة إلى الإدارة:*", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "💬 <i>أرسل رسالتك أو استفسارك الآن، وسيتم تحويله مباشرة إلى الإدارة:</i>", parse_mode="HTML")
     
     elif action == "admin":
         if user_id != ADMIN_ID:
@@ -550,14 +570,13 @@ def handle_menu_callbacks(call):
         markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
         
         admin_panel = (
-            f"👑 **لوحة تحكم المشرف العامة:**\n\n"
-            f"> • **إجمالي المستخدمين المسجلين:** `{total_users}`\n"
-            f"> • **إجمالي بوستات الحضور:** `{total_polls}`\n"
-            f"> • **حالة السيرفر:** `يعمل بكفاءة عالية 🟢`"
+            f"👑 <b>لوحة تحكم المشرف العامة:</b>\n\n"
+            f"<blockquote>• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code>\n"
+            f"• <b>إجمالي بوستات الحضور:</b> <code>{total_polls}</code>\n"
+            f"• <b>حالة السيرفر:</b> يعمل بكفاءة عالية 🟢</blockquote>"
         )
-        bot.send_message(call.message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
+        bot.send_message(call.message.chat.id, admin_panel, parse_mode="HTML", reply_markup=markup)
 
-# معالجة إدخال كود الكوبون عبر المحادثة العادية
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_coupon_input")
 def process_coupon_text_input(message):
     user_id = message.from_user.id
@@ -565,34 +584,33 @@ def process_coupon_text_input(message):
     user_states.pop(user_id, None)
     process_coupon_redemption(message, code)
 
-# معالجات إنشاء الأسئلة التفاعلية المطورة
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_q_text")
 def q_step_text(message):
     user_id = message.from_user.id
     q_text = message.text.strip()
     user_states[user_id] = {"q_text": q_text, "step": "waiting_opt_a"}
-    bot.reply_to(message, "📌 *أرسل الآن الخيار الأول (أ):*", parse_mode="Markdown")
+    bot.reply_to(message, "📌 <i>أرسل الآن الخيار الأول (أ):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[message.from_user.id].get("step") == "waiting_opt_a")
 def q_step_opt_a(message):
     user_id = message.from_user.id
     user_states[user_id]["opt_a"] = message.text.strip()
     user_states[user_id]["step"] = "waiting_opt_b"
-    bot.reply_to(message, "📌 *أرسل الآن الخيار الثاني (ب):*", parse_mode="Markdown")
+    bot.reply_to(message, "📌 <i>أرسل الآن الخيار الثاني (ب):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_opt_b")
 def q_step_opt_b(message):
     user_id = message.from_user.id
     user_states[user_id]["opt_b"] = message.text.strip()
     user_states[user_id]["step"] = "waiting_opt_c"
-    bot.reply_to(message, "📌 *أرسل الآن الخيار الثالث (ج):*", parse_mode="Markdown")
+    bot.reply_to(message, "📌 <i>أرسل الآن الخيار الثالث (ج):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_opt_c")
 def q_step_opt_c(message):
     user_id = message.from_user.id
     user_states[user_id]["opt_c"] = message.text.strip()
     user_states[user_id]["step"] = "waiting_opt_d"
-    bot.reply_to(message, "📌 *أرسل الآن الخيار الرابع (د):*", parse_mode="Markdown")
+    bot.reply_to(message, "📌 <i>أرسل الآن الخيار الرابع (د):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_opt_d")
 def q_step_opt_d(message):
@@ -607,7 +625,7 @@ def q_step_opt_d(message):
         create_colored_btn("الخيار (ج)", callback_data="q_correct_C", style="success"),
         create_colored_btn("الخيار (د)", callback_data="q_correct_D", style="success")
     )
-    bot.reply_to(message, "🎯 *اختر الإجابة الصحيحة من الأزرار أدناه:*", parse_mode="Markdown", reply_markup=markup)
+    bot.reply_to(message, "🎯 <i>اختر الإجابة الصحيحة من الأزرار أدناه:</i>", parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("q_correct_"))
 def q_step_correct_chosen(call):
@@ -620,7 +638,7 @@ def q_step_correct_chosen(call):
     user_states[user_id]["correct_opt"] = correct_opt
     user_states[user_id]["step"] = "waiting_q_channel"
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "🚀 *أرسل الآن معرف قناتك لنشر السؤال التفاعلي فيها (مثال: `@MyChannel`):*", parse_mode="Markdown")
+    bot.send_message(call.message.chat.id, "🚀 <i>أرسل الآن معرف قناتك لنشر السؤال التفاعلي فيها (مثال: <code>@MyChannel</code>):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_q_channel")
 def q_step_publish(message):
@@ -645,8 +663,8 @@ def q_step_publish(message):
     )
     
     q_msg_content = (
-        f"💡 **سؤال تفاعلي جديد:**\n\n"
-        f"📌 **{html.escape(q_text)}**\n\n"
+        f"💡 <b>سؤال تفاعلي جديد:</b>\n\n"
+        f"📌 <b>{html.escape(q_text)}</b>\n\n"
         f"🔹 أ) {html.escape(oa)}\n"
         f"🔹 ب) {html.escape(ob)}\n"
         f"🔹 ج) {html.escape(oc)}\n"
@@ -664,21 +682,21 @@ def q_step_publish(message):
         conn.commit()
         conn.close()
         
-        bot.reply_to(message, "✅ **تم نشر السؤال التفاعلي بنجاح في القناة وتفعيل أزرار الإجابة!**", parse_mode="Markdown")
+        bot.reply_to(message, "✅ <b>تم نشر السؤال التفاعلي بنجاح في القناة وتفعيل أزرار الإجابة!</b>", parse_mode="HTML")
     except Exception as e:
-        bot.reply_to(message, f"❌ **فشل نشر السؤال في القناة:**\n\n> تأكد أن البوت مشرف ولديه صلاحيات الإرسال.\n> التفاصيل: `{e}`", parse_mode="Markdown")
+        bot.reply_to(message, f"❌ <b>فشل نشر السؤال في القناة:</b>\n\n<blockquote>تأكد أن البوت مشرف ولديه صلاحيات الإرسال.\nالتفاصيل: <code>{e}</code></blockquote>", parse_mode="HTML")
 
-# التعامل مع إجابات المستخدمين على الأسئلة التفاعلية (مع نظام سرعة الاستجابة ومنح نقاط مضاعفة لأول أسرع إجابة)
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
 def handle_question_answer(call):
-    data_parts = call.data.split("_")
-    if len(data_parts) < 3:
+    # استخراج question_id واختيار الإجابة بدقة تامة بغض النظر عن عدد الشرطات السفلية
+    raw_data = call.data[4:] # إزالة "ans_"
+    last_underscore_idx = raw_data.rfind('_')
+    if last_underscore_idx == -1:
         return
+    question_id = raw_data[:last_underscore_idx]
+    chosen_opt = raw_data[last_underscore_idx+1:]
     
-    question_id = f"{data_parts[1]}_{data_parts[2]}"
-    chosen_opt = data_parts[3]
     user = call.from_user
-    current_time = time.time()
     
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -704,7 +722,6 @@ def handle_question_answer(call):
         
     is_correct = 1 if chosen_opt == correct_opt else 0
     
-    # تطوير إضافي: نظام سرعة الاستجابة (نقاط مضاعفة لأول أسرع إجابة صحيحة)
     cursor.execute("SELECT COUNT(*) FROM question_answers WHERE question_id = ? AND is_correct = 1", (question_id,))
     correct_count_so_far = cursor.fetchone()[0]
     
@@ -714,7 +731,7 @@ def handle_question_answer(call):
     
     if is_correct == 1:
         if correct_count_so_far == 0:
-            earned_points = base_points * 2  # نقاط مضاعفة للأول (سرعة الاستجابة)
+            earned_points = base_points * 2
             speed_bonus_note = " 🚀 (مبروك! حصلت على نقاط مضاعفة لأنك أسرع إجابة!)"
         else:
             earned_points = base_points
@@ -767,10 +784,10 @@ def process_channel_posting(message):
         conn.commit()
         conn.close()
         
-        bot.reply_to(message, f"✅ **تم نشر بوست الحضور بنجاح في القناة!**\n\n> 🔄 *البوت الآن يمتلك الصلاحية الكاملة لتعديل الرسالة وتحديث الحاضرين فورياً.*", parse_mode="Markdown")
+        bot.reply_to(message, "✅ <b>تم نشر بوست الحضور بنجاح في القناة!</b>\n\n<blockquote>🔄 البوت الآن يمتلك الصلاحية الكاملة لتعديل الرسالة وتحديث الحاضرين فورياً.</blockquote>", parse_mode="HTML")
     except Exception as e:
         conn.close()
-        bot.reply_to(message, f"❌ **فشل النشر في القناة:**\n\n> تأكد أن البوت **مشرف** في القناة ولديه صلاحية إرسال الرسائل، وأن المعرف صحيح (مثال: `@MyChannel`).\n> *التفاصيل التقنية:* `{e}`", parse_mode="Markdown")
+        bot.reply_to(message, f"❌ <b>فشل النشر في القناة:</b>\n\n<blockquote>تأكد أن البوت <b>مشرف</b> في القناة ولديه صلاحية إرسال الرسائل، وأن المعرف صحيح (مثال: <code>@MyChannel</code>).\nالتفاصيل التقنية: <code>{e}</code></blockquote>", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("view_stats_"))
 def view_poll_detailed_stats(call):
@@ -799,17 +816,17 @@ def view_poll_detailed_stats(call):
     
     voters_str = ""
     if votes:
-        voters_lines = [f"> {i+1}. **{v[0]}** ({v[1]})" for i, v in enumerate(votes)]
+        voters_lines = [f"<blockquote>{i+1}. <b>{v[0]}</b> ({v[1]})</blockquote>" for i, v in enumerate(votes)]
         voters_str = "\n".join(voters_lines)
     else:
-        voters_str = "> *لم يسجل أحد حضوره حتى الآن.*"
+        voters_str = "<blockquote>• لم يسجل أحد حضوره حتى الآن.</blockquote>"
         
     stats_detail_msg = (
-        f"📊 **إحصائيات الحضور اليومية:**\n\n"
-        f"> • **عنوان البوست اليومي:** `{title}`\n"
-        f"> • **إجمالي الحاضرين:** `{count}` عضو\n"
-        f"> • **نسبة الحضور التقريبية:** `{attendance_rate}%`\n\n"
-        f"👥 **أسماء الحاضرين (بدون ملفات):**\n"
+        f"📊 <b>إحصائيات الحضور اليومية:</b>\n\n"
+        f"<blockquote>• <b>عنوان البوست اليومي:</b> <code>{title}</code>\n"
+        f"• <b>إجمالي الحاضرين:</b> <code>{count}</code> عضو\n"
+        f"• <b>نسبة الحضور التقريبية:</b> <code>{attendance_rate}%</code></blockquote>\n\n"
+        f"👥 <b>أسماء الحاضرين (بدون ملفات):</b>\n"
         f"{voters_str}"
     )
     
@@ -823,7 +840,7 @@ def view_poll_detailed_stats(call):
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
         text=stats_detail_msg,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=markup
     )
 
@@ -856,8 +873,8 @@ def delete_poll_callback(call):
     bot.edit_message_text(
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
-        text="🗑️ **تم حذف البوست وسجله بنجاح.**",
-        parse_mode="Markdown"
+        text="🗑️ <b>تم حذف البوست وسجله بنجاح.</b>",
+        parse_mode="HTML"
     )
 
 @bot.callback_query_handler(func=lambda call: call.data == "wizard_title_type")
@@ -868,13 +885,13 @@ def wizard_title_type(call):
         create_colored_btn("✏️ اسم يدوي (اكتبه بنفسك)", callback_data="w_title_manual", style="primary"),
         create_colored_btn(f"📅 اسم تلقائي باليوم والتاريخ ({get_arabic_date_string()})", callback_data="w_title_auto", style="success")
     )
-    bot.send_message(call.message.chat.id, "📌 *اختر كيف تريد تسمية بوست الحضور الجديد:*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "📌 <i>اختر كيف تريد تسمية بوست الحضور الجديد:</i>", parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "w_title_manual")
 def wizard_title_manual(call):
     user_states[call.from_user.id] = "waiting_manual_title"
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "📝 *أرسل الآن العنوان أو الكليشة اليدوية التي تريدها للبوست:*", parse_mode="Markdown")
+    bot.send_message(call.message.chat.id, "📝 <i>أرسل الآن العنوان أو الكليشة اليدوية التي تريدها للبوست:</i>", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "w_title_auto")
 def wizard_title_auto(call):
@@ -902,7 +919,7 @@ def ask_duration_wizard(message):
         create_colored_btn("ساعتين", callback_data="w_dur_120", style="primary"),
         create_colored_btn("بدون وقت إغلاق (مفتوح)", callback_data="w_dur_0", style="success")
     )
-    bot.send_message(message.chat.id, "⏱️ *اختر المدة الزمنية لصلاحية البوست بعد نشره:*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(message.chat.id, "⏱️ <i>اختر المدة الزمنية لصلاحية البوست بعد نشره:</i>", parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_duration")
 def callback_set_duration(call):
@@ -926,7 +943,7 @@ def handle_wizard_duration(call):
         create_colored_btn("📺 عرض الأسماء في رسالة البوست بالقناة", callback_data="w_show_1", style="success"),
         create_colored_btn("🔒 إخفاء الأسماء من القناة وإرسالها للخاص فقط", callback_data="w_show_0", style="primary")
     )
-    bot.send_message(call.message.chat.id, "👁️ *كيف تريد عرض قائمة أسماء الحضور المسجلين؟*\n\n> *ملاحظة: في الحالتين سيصلك الكشف الكامل على الخاص.*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "👁️ <b>كيف تريد عرض قائمة أسماء الحضور المسجلين؟</b>\n\n<blockquote>ملاحظة: في الحالتين سيصلك الكشف الكامل على الخاص.</blockquote>", parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("w_show_"))
 def handle_wizard_show_mode(call):
@@ -942,7 +959,7 @@ def handle_wizard_show_mode(call):
     
     markup = types.InlineKeyboardMarkup()
     markup.add(create_colored_btn("🚀 نشر البوست الآن في قناتك", callback_data="menu_share", style="success"))
-    bot.send_message(call.message.chat.id, "🎉 **أصبح بوست الحضور جاهزاً للنشر!**\n\n👇 *اضغط الزر أدناه لبدء النشر المباشر بالقناة:*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "🎉 <b>أصبح بوست الحضور جاهزاً للنشر!</b>\n\n<blockquote>👇 اضغط الزر أدناه لبدء النشر المباشر بالقناة:</blockquote>", parse_mode="HTML", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_manual_title")
 def save_manual_title(message):
@@ -956,7 +973,7 @@ def save_manual_title(message):
     conn.close()
     user_states.pop(user_id, None)
     
-    bot.reply_to(message, "✅ *تم حفظ عنوان البوست بنجاح!*", parse_mode="Markdown")
+    bot.reply_to(message, "✅ <i>تم حفظ عنوان البوست بنجاح!</i>", parse_mode="HTML")
     ask_duration_wizard(message)
 
 @bot.callback_query_handler(func=lambda call: call.data == "set_display_mode")
@@ -967,7 +984,7 @@ def callback_set_display_mode(call):
         create_colored_btn("📺 عرض القائمة بالقناة", callback_data="w_show_1", style="success"),
         create_colored_btn("🔒 إرسال الكشف للخاص فقط", callback_data="w_show_0", style="primary")
     )
-    bot.send_message(call.message.chat.id, "👁️ *اختر طريقة عرض الكشف:*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "👁️ <i>اختر طريقة عرض الكشف:</i>", parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("export_"))
 def export_attendance_csv(call):
@@ -996,7 +1013,7 @@ def export_attendance_csv(call):
     bytes_io.name = f"attendance_{poll_id}.csv"
     
     bot.answer_callback_query(call.id)
-    bot.send_document(call.message.chat.id, bytes_io, caption=f"📄 **كشف الحضور لبوست:**\n`{title}`", parse_mode="Markdown")
+    bot.send_document(call.message.chat.id, bytes_io, caption=f"📄 <b>كشف الحضور لبوست:</b>\n<code>{title}</code>", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
 def admin_broadcast_prompt(call):
@@ -1005,7 +1022,7 @@ def admin_broadcast_prompt(call):
         return
     user_states[ADMIN_ID] = "waiting_broadcast_msg"
     bot.answer_callback_query(call.id)
-    bot.send_message(ADMIN_ID, "📢 *أرسل الآن نص الرسالة الجماعية (Broadcast):*", parse_mode="Markdown")
+    bot.send_message(ADMIN_ID, "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_broadcast_msg")
 def execute_broadcast(message):
@@ -1019,11 +1036,11 @@ def execute_broadcast(message):
     
     success_count = 0
     fail_count = 0
-    status_msg = bot.reply_to(message, "🚀 *جاري بدء إرسال الرسالة الجماعية..*", parse_mode="Markdown")
+    status_msg = bot.reply_to(message, "🚀 <i>جاري بدء إرسال الرسالة الجماعية..</i>", parse_mode="HTML")
     
     for (uid,) in users:
         try:
-            bot.send_message(uid, f"📢 **تنبيه هام من الإدارة:**\n\n> {broadcast_text}", parse_mode="Markdown")
+            bot.send_message(uid, f"📢 <b>تنبيه هام من الإدارة:</b>\n\n<blockquote>{broadcast_text}</blockquote>", parse_mode="HTML")
             success_count += 1
         except Exception:
             fail_count += 1
@@ -1031,8 +1048,8 @@ def execute_broadcast(message):
     bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=status_msg.message_id,
-        text=f"✅ **تم الانتهاء من الإرسال الجماعي بنجاح!**\n\n> • **تم بنجاح:** `{success_count}`\n> • **فشل:** `{fail_count}`",
-        parse_mode="Markdown"
+        text=f"✅ <b>تم الانتهاء من الإرسال الجماعي بنجاح!</b>\n\n<blockquote>• تم بنجاح: <code>{success_count}</code>\n• فشل: <code>{fail_count}</code></blockquote>",
+        parse_mode="HTML"
     )
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_support_msg")
@@ -1040,17 +1057,17 @@ def forward_support_message(message):
     user_id = message.from_user.id
     user_states.pop(user_id, None)
     support_forward = (
-        f"📩 **رسالة دعم فني جديدة:**\n\n"
-        f"> • **الاسم:** {message.from_user.first_name}\n"
-        f"> • **الأيدي:** `{user_id}`\n"
-        f"> • **المعرف:** @{message.from_user.username if message.from_user.username else 'لا يوجد'}\n\n"
-        f"💬 **النص:**\n> {message.text}"
+        f"📩 <b>رسالة دعم فني جديدة:</b>\n\n"
+        f"<blockquote>• الاسم: {message.from_user.first_name}\n"
+        f"• الأيدي: <code>{user_id}</code>\n"
+        f"• المعرف: @{message.from_user.username if message.from_user.username else 'لا يوجد'}</blockquote>\n\n"
+        f"💬 <b>النص:</b>\n<blockquote>{message.text}</blockquote>"
     )
     admin_markup = types.InlineKeyboardMarkup()
     admin_markup.add(create_colored_btn("💬 الرد على المستخدم", callback_data=f"reply_{user_id}", style="primary"))
     try:
-        bot.send_message(ADMIN_ID, support_forward, parse_mode="Markdown", reply_markup=admin_markup)
-        bot.reply_to(message, "✅ *تم إرسال رسالتك بنجاح إلى الإدارة!*", parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, support_forward, parse_mode="HTML", reply_markup=admin_markup)
+        bot.reply_to(message, "✅ <i>تم إرسال رسالتك بنجاح إلى الإدارة!</i>", parse_mode="HTML")
     except Exception:
         bot.reply_to(message, "❌ حدث خطأ أثناء إرسال الرسالة.")
 
@@ -1062,14 +1079,14 @@ def admin_start_reply(call):
     target_user_id = call.data.replace("reply_", "")
     user_states[ADMIN_ID] = f"admin_reply_to_{target_user_id}"
     bot.answer_callback_query(call.id)
-    bot.send_message(ADMIN_ID, f"✍️ *اكتب الرد للمستخدم (ID: `{target_user_id}`):*", parse_mode="Markdown")
+    bot.send_message(ADMIN_ID, f"✍️ <i>اكتب الرد للمستخدم (ID: <code>{target_user_id}</code>):</i>", parse_mode="HTML")
 
 @bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and user_states[message.from_user.id].startswith("admin_reply_to_"))
 def send_admin_reply_to_user(message):
     target_user_id = int(user_states[ADMIN_ID].replace("admin_reply_to_", ""))
     user_states.pop(ADMIN_ID, None)
     try:
-        bot.send_message(target_user_id, f"📥 **رد جديد من الدعم الفني:**\n\n> {message.text}", parse_mode="Markdown")
+        bot.send_message(target_user_id, f"📥 <b>رد جديد من الدعم الفني:</b>\n\n<blockquote>{message.text}</blockquote>", parse_mode="HTML")
         bot.reply_to(message, "✅ تم إرسال الرد بنجاح!")
     except Exception:
         bot.reply_to(message, "❌ فشل إرسال الرد.")
@@ -1126,14 +1143,14 @@ def handle_channel_attendance(call):
     conn.close()
     
     owner_notification = (
-        f"🔔 **تسجيل حضور جديد في بوستك!**\n\n"
-        f"> • **البوست:** {title}\n"
-        f"> • **المسجل:** {fixed_name}\n"
-        f"> • **المعرف:** `{uname_str}`\n"
-        f"> • **الأيدي:** `{user.id}`"
+        f"🔔 <b>تسجيل حضور جديد في بوستك!</b>\n\n"
+        f"<blockquote>• البوست: {title}\n"
+        f"• المسجل: {fixed_name}\n"
+        f"• المعرف: <code>{uname_str}</code>\n"
+        f"• الأيدي: <code>{user.id}</code></blockquote>"
     )
     try:
-        bot.send_message(owner_id, owner_notification, parse_mode="Markdown")
+        bot.send_message(owner_id, owner_notification, parse_mode="HTML")
     except Exception:
         pass 
         
