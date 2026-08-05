@@ -3,7 +3,7 @@ from telebot import types
 from flask import Flask, request
 import sqlite3
 
-TOKEN = "8682109455:AAHPGbqvIDjQtulfek5S1ujR-53CzrSthKs"
+TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -73,4 +73,14 @@ def send_welcome(message):
 @app.route('/' + TOKEN, methods=['POST'])
 def getMessage():
     json_str = request.get_data().decode('UTF-8')
-    update = telebot.types
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return "!", 200
+
+@app.route("/")
+def webhook():
+    bot.remove_webhook()
+    bot.set_webhook(url="https://رابط-مشروعك.railway.app/" + TOKEN)
+    return "Webhook set!", 200
+
+print("✅ البوت يعمل الآن باستخدام Webhook...")
