@@ -678,45 +678,9 @@ def handle_menu_callbacks(call):
     elif action == "admin":
         if user_id != ADMIN_ID:
             bot.answer_callback_query(call.id, "هذا الزر للمشرف فقط ⛔", show_alert=True)
-            # --- معالج الضغط على زر الرد من قبل المطور ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("reply_"))
-def admin_start_reply_user(call):
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "هذا الزر للمشرف فقط ⛔", show_alert=True)
-        return
-        
-    target_user_id = call.data.replace("reply_", "")
-    # تخزين حالة المطور بأنه في وضع الرد على المستخدم المحدد
-    user_states[ADMIN_ID] = {"step": "waiting_admin_reply", "target_user_id": int(target_user_id)}
-    
-    bot.answer_callback_query(call.id)
-    bot.send_message(
-        ADMIN_ID,
-        f"💬 <b>أرسل الآن ردك للمستخدم (الأيدي: <code>{target_user_id}</code>):</b>\n\n"
-        f"<i>اكتب النص مباشرة وسيتم إرساله إليه فوراً.</i>",
-        parse_mode="HTML"
-    )
-
-# --- معالج استقبال نص الرد من المطور وإرساله للعميل ---
-@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[message.from_user.id].get("step") == "waiting_admin_reply")
-def send_admin_reply_to_user(message):
-    state_data = user_states.pop(ADMIN_ID, None)
-    target_user_id = state_data.get("target_user_id")
-    admin_reply_text = message.text.strip()
-    
-    try:
-        # إرسال رد المطور إلى العميل
-        client_msg = (
-            f"📬 <b>رد جديد من إدارة البوت (المطور):</b>\n\n"
-            f"<blockquote>{html.escape(admin_reply_text)}</blockquote>"
-        )
-        bot.send_message(target_user_id, client_msg, parse_mode="HTML")
-        bot.reply_to(message, f"✅ <b>تم إرسال الرد بنجاح إلى المستخدم (<code>{target_user_id}</code>)!</b>", parse_mode="HTML")
-    except Exception as e:
-        bot.reply_to(message, f"❌ <b>فشل إرسال الرد للمستخدم:</b>\n<code>{e}</code>\n\n<i>قد يكون المستخدم قد حظر البوت.</i>", parse_mode="HTML")  return
+            return
         bot.answer_callback_query(call.id)
-  
-    show_admin_panel(call.message.chat.id)
+        show_admin_panel(call.message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "report_weekly_supervisor")
 def handle_weekly_supervisor_report(call):
