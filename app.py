@@ -554,7 +554,7 @@ def process_coupon_text_input(message):
     user_id = message.from_user.id
     code = message.text.strip()
     user_states.pop(user_id, None)
-    # تفعيل الكوبون
+    
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT points, max_uses, uses_count, is_closed FROM coupons WHERE code = ?", (code,))
@@ -580,7 +580,6 @@ def process_coupon_text_input(message):
     conn.close()
     bot.reply_to(message, f"🎉 <b>تم شحن الكوبون بنجاح!</b>\nأُضيف إلى رصيدك <code>{pts}</code> نقطة.", parse_mode="HTML")
 
-# إدارة الأسئلة التفاعلية وخطوات إدخالها
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_q_text")
 def q_step_text(message):
     user_id = message.from_user.id
