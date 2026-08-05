@@ -40,8 +40,16 @@ def init_db():
                         title TEXT, 
                         custom_message TEXT, 
                         duration INTEGER DEFAULT 0,
-                        show_in_channel INTEGER DEFAULT 1
+                        show_in_channel INTEGER DEFAULT 1,
+                        show_on_leaderboard INTEGER DEFAULT 1
                     )""")
+  try:
+    cursor.execute(
+        "ALTER TABLE user_settings ADD COLUMN show_on_leaderboard INTEGER"
+        " DEFAULT 1"
+    )
+  except sqlite3.OperationalError:
+    pass
 
   cursor.execute("""CREATE TABLE IF NOT EXISTS polls (
                         poll_id TEXT PRIMARY KEY, 
@@ -83,8 +91,16 @@ def init_db():
                         user_id INTEGER,
                         channel_id TEXT,
                         channel_title TEXT,
+                        show_on_leaderboard INTEGER DEFAULT 1,
                         PRIMARY KEY (user_id, channel_id)
                     )""")
+  try:
+    cursor.execute(
+        "ALTER TABLE saved_channels ADD COLUMN show_on_leaderboard INTEGER"
+        " DEFAULT 1"
+    )
+  except sqlite3.OperationalError:
+    pass
 
   # جدول تتبع إجمالي الزوار لكل قناة (أكثر القنوات حصولاً على الزوار)
   cursor.execute("""CREATE TABLE IF NOT EXISTS channel_total_visits (
@@ -1188,6 +1204,13 @@ def handle_menu_callbacks(call):
             style="primary",
         )
     )
+    markup.add(
+        create_colored_btn(
+            "🔒 إعدادات الخصوصية في المتصدرين",
+            callback_data="set_privacy_leaderboard",
+            style="primary",
+        )
+    )
     bot.answer_callback_query(call.id)
     bot.send_message(
         call.message.chat.id,
@@ -1308,29 +1331,35 @@ def handle_menu_callbacks(call):
     conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
     cursor = conn.cursor()
 
-    # جلب أكثر القنوات حصولاً على الزوار
+    # جلب أكثر القنوات حصولاً على الزوار مع فحص إعداد الخصوصية
     cursor.execute("""
-            SELECT channel_title, visits_count 
-            FROM channel_total_visits 
-            WHERE visits_count > 0 
-            ORDER BY visits_count DESC LIMIT 5
+            SELECT c.channel_title, c.visits_count, MAX(COALESCE(sc.show_on_leaderboard, 1)) as show_priv
+            FROM channel_total_visits c
+            LEFT JOIN saved_channels sc ON c.channel_id = sc.channel_id
+            WHERE c.visits_count > 0 
+            GROUP BY c.channel_id
+            ORDER BY c.visits_count DESC LIMIT 5
         """)
     top_channels = cursor.fetchall()
 
+    # جلب أكثر المستخدمين جلباً للزوار مع فحص الخصوصية
     cursor.execute("""
-            SELECT r.owner_id, r.visits_count, p.full_name 
+            SELECT r.owner_id, r.visits_count, p.full_name, COALESCE(us.show_on_leaderboard, 1) as show_priv
             FROM referrals r 
             LEFT JOIN user_profiles p ON r.owner_id = p.user_id 
+            LEFT JOIN user_settings us ON r.owner_id = us.user_id
             WHERE r.visits_count > 0
             ORDER BY r.visits_count DESC LIMIT 5
         """)
     top_users = cursor.fetchall()
 
+    # جلب أكثر الأعضاء تفاعلاً ونقاطاً مع فحص الخصوصية
     cursor.execute("""
-            SELECT tp.user_id, tp.points, p.full_name, b.badge_icon 
+            SELECT tp.user_id, tp.points, p.full_name, b.badge_icon, COALESCE(us.show_on_leaderboard, 1) as show_priv
             FROM user_points tp 
             LEFT JOIN user_profiles p ON tp.user_id = p.user_id 
             LEFT JOIN user_badges b ON tp.user_id = b.user_id
+            LEFT JOIN user_settings us ON tp.user_id = us.user_id
             WHERE tp.points > 0
             ORDER BY tp.points DESC LIMIT 5
         """)
@@ -1347,9 +1376,12 @@ def handle_menu_callbacks(call):
       )
     else:
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-      for i, (c_title, c_visits) in enumerate(top_channels):
+      for i, (c_title, c_visits, show_priv) in enumerate(top_channels):
         medal = medals[i] if i < len(medals) else "🔹"
-        name_display = html.escape(c_title) if c_title else "قناة"
+        if show_priv == 0:
+          name_display = "قناة مخفية 🔒"
+        else:
+          name_display = html.escape(c_title) if c_title else "قناة"
         leaderboard_text += (
             f"<blockquote>{medal} <b>{name_display}</b> — <b>{c_visits}</b>"
             " زائر</blockquote>\n"
@@ -1362,9 +1394,12 @@ def handle_menu_callbacks(call):
       leaderboard_text += "<blockquote>• لا توجد بيانات حتى الآن..</blockquote>\n\n"
     else:
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-      for i, (uid, count, fname) in enumerate(top_users):
+      for i, (uid, count, fname, show_priv) in enumerate(top_users):
         medal = medals[i] if i < len(medals) else "🔹"
-        name_display = html.escape(fname) if fname else f"مستخدم {uid}"
+        if show_priv == 0:
+          name_display = "مستخدم مخفي 🔒"
+        else:
+          name_display = html.escape(fname) if fname else f"مستخدم {uid}"
         leaderboard_text += (
             f"<blockquote>{medal} <b>{name_display}</b> — <b>{count}</b>"
             " زائر</blockquote>\n"
@@ -1379,10 +1414,13 @@ def handle_menu_callbacks(call):
       )
     else:
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-      for i, (uid, pts, fname, b_icon) in enumerate(top_points):
+      for i, (uid, pts, fname, b_icon, show_priv) in enumerate(top_points):
         medal = medals[i] if i < len(medals) else "🔹"
         icon = b_icon if b_icon else "🏅"
-        name_display = html.escape(fname) if fname else f"مستخدم {uid}"
+        if show_priv == 0:
+          name_display = "مستخدم مخفي 🔒"
+        else:
+          name_display = html.escape(fname) if fname else f"مستخدم {uid}"
         leaderboard_text += (
             f"<blockquote>{medal} {icon} <b>{name_display}</b> — <b>{pts}</b>"
             " نقطة</blockquote>\n"
@@ -1431,6 +1469,160 @@ def handle_menu_callbacks(call):
       return
     bot.answer_callback_query(call.id)
     show_admin_panel(call.message.chat.id)
+
+
+# --- معالجات إعدادات الخصوصية والظهور في المتصدرين ---
+@bot.callback_query_handler(func=lambda call: call.data == "set_privacy_leaderboard")
+def callback_set_privacy_leaderboard(call):
+  user_id = call.from_user.id
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT show_on_leaderboard FROM user_settings WHERE user_id = ?",
+      (user_id,),
+  )
+  row = cursor.fetchone()
+  user_show = row[0] if row and row[0] is not None else 1
+
+  cursor.execute(
+      "SELECT channel_id, channel_title, show_on_leaderboard FROM"
+      " saved_channels WHERE user_id = ?",
+      (user_id,),
+  )
+  channels = cursor.fetchall()
+  conn.close()
+
+  user_status_icon = "✅ (مرئي علناً)" if user_show == 1 else "🔒 (مخفي / مجهول)"
+
+  markup = types.InlineKeyboardMarkup(row_width=1)
+  markup.add(
+      create_colored_btn(
+          f"👤 اسمي في المتصدرين: {user_status_icon}",
+          callback_data="toggle_user_leaderboard_privacy",
+          style="success" if user_show == 1 else "danger",
+      )
+  )
+
+  if channels:
+    markup.add(
+        types.InlineKeyboardButton(
+            text="📢 قنواتك المسجلة:", callback_data="noop"
+        )
+    )
+    for cid, ctitle, c_show in channels:
+      c_icon = "✅ مرئية" if c_show == 1 else "🔒 مخفية"
+      markup.add(
+          create_colored_btn(
+              f"📢 {html.escape(ctitle)}: {c_icon}",
+              callback_data=f"toggle_chan_priv_{cid}",
+              style="success" if c_show == 1 else "danger",
+          )
+      )
+
+  markup.add(
+      create_colored_btn(
+          "🔙 عودة للإعدادات", callback_data="menu_settings", style="primary"
+      )
+  )
+
+  try:
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=(
+            "🔒 <b>إعدادات الخصوصية والظهور في لوحة المتصدرين:</b>\n\n<blockquote>اختر"
+            " العنصر للتبديل بين الظهور علناً أو إخفاء الاسم/القناة:</blockquote>"
+        ),
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+  except Exception:
+    bot.send_message(
+        call.message.chat.id,
+        "🔒 <b>إعدادات الخصوصية والظهور في لوحة المتصدرين:</b>",
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+  bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data == "toggle_user_leaderboard_privacy"
+)
+def toggle_user_leaderboard_privacy(call):
+  user_id = call.from_user.id
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT show_on_leaderboard FROM user_settings WHERE user_id = ?",
+      (user_id,),
+  )
+  row = cursor.fetchone()
+  current = row[0] if row and row[0] is not None else 1
+  new_val = 0 if current == 1 else 1
+
+  cursor.execute(
+      "INSERT OR IGNORE INTO user_settings (user_id, title, duration,"
+      " show_in_channel, show_on_leaderboard) VALUES (?, '', 0, 1, ?)",
+      (user_id, new_val),
+  )
+  cursor.execute(
+      "UPDATE user_settings SET show_on_leaderboard = ? WHERE user_id = ?",
+      (new_val, user_id),
+  )
+  conn.commit()
+  conn.close()
+
+  bot.answer_callback_query(
+      call.id,
+      f"✅ تم تحديث إعداد خصوصية الاسم إلى:"
+      f" {'مرئي علناً' if new_val == 1 else 'مخفي (مجهول)'}",
+      show_alert=True,
+  )
+  callback_set_privacy_leaderboard(call)
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith("toggle_chan_priv_")
+)
+def toggle_chan_privacy(call):
+  user_id = call.from_user.id
+  channel_id = call.data.replace("toggle_chan_priv_", "")
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT show_on_leaderboard FROM saved_channels WHERE user_id = ? AND"
+      " channel_id = ?",
+      (user_id, channel_id),
+  )
+  row = cursor.fetchone()
+  if not row:
+    bot.answer_callback_query(call.id, "❌ القناة غير موجودة.", show_alert=True)
+    conn.close()
+    return
+  current = row[0] if row[0] is not None else 1
+  new_val = 0 if current == 1 else 1
+
+  cursor.execute(
+      "UPDATE saved_channels SET show_on_leaderboard = ? WHERE user_id = ? AND"
+      " channel_id = ?",
+      (new_val, user_id, channel_id),
+  )
+  conn.commit()
+  conn.close()
+
+  bot.answer_callback_query(
+      call.id,
+      f"✅ تم تحديث خصوصية القناة إلى:"
+      f" {'مرئية' if new_val == 1 else 'مخفية'}",
+      show_alert=True,
+  )
+  callback_set_privacy_leaderboard(call)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "noop")
+def noop_callback(call):
+  bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "report_weekly_supervisor")
