@@ -1,7 +1,6 @@
 import telebot
 from telebot import types
 from datetime import datetime
-import pytz
 
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
 # حط الـ ID الخاص بيك هنا (أرقام فقط)، لو ما تعرفاش ابحث في التليجرام عن @userinfobot وانسخ الـ Id
