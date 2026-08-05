@@ -1,113 +1,70 @@
 import telebot
 from telebot import types
-import sqlite3
+from datetime import datetime
+import pytz
 
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
+# حط الـ ID الخاص بيك هنا (أرقام فقط)، لو ما تعرفاش ابحث في التليجرام عن @userinfobot وانسخ الـ Id
+ADMIN_ID = 1250493517 
+
 bot = telebot.TeleBot(TOKEN)
 
-def init_db():
-    conn = sqlite3.connect('elite_team.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project TEXT,
-            task TEXT,
-            assignee TEXT,
-            status TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
+# ذاكرة مؤقتة بسيطة لمنع العضو من تسجيل حضوره مرتين في نفس اليوم لنفس الفترة
+attendance_log = set()
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_tasks = types.InlineKeyboardButton("📋 سجل المهام", callback_data="show_tasks")
-    btn_add = types.InlineKeyboardButton("➕ إضافة مهمة جديدة", callback_data="add_task_prompt")
-    btn_team = types.InlineKeyboardButton("👥 الإدارة العليا", callback_data="show_team")
-    btn_projects = types.InlineKeyboardButton("🌐 مشاريع الفريق", callback_data="show_projects")
-    markup.add(btn_tasks, btn_add, btn_team, btn_projects)
+    # إنشاء أزرار تسجيل الحضور (فترتين كمثال)
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn_morning = types.InlineKeyboardButton("☀️ تسجيل حضور (الفترة الصباحية)", callback_data="attend_morning")
+    btn_evening = types.InlineKeyboardButton("🌙 تسجيل حضور (الفترة المسائية)", callback_data="attend_evening")
+    markup.add(btn_morning, btn_evening)
     
     welcome_text = (
-        f"🌐 **المنظومة الإدارية الرسمية لفريق النخبة**\n"
-        f"أهلاً بك يا {message.from_user.first_name} في النظام المركزي.\n\n"
-        "اختر القسم المطلوب من الأزرار أدناه:"
+        "أهلاً بك في نظام المتابعة وتسجيل الحضور الخاص بفريق النخبة.\n\n"
+        "الرجاء الضغط على الزر المناسب لتسجيل حضورك اليوم:"
     )
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    conn = sqlite3.connect('elite_team.db', check_same_thread=False)
-    cursor = conn.cursor()
+@bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
+def handle_attendance(call):
+    # تحديد الفترة بناءً على الزر اللي ضغطه العضو
+    period = "الصباحية ☀️" if "morning" in call.data else "المسائية 🌙"
     
-    if call.data == "show_tasks":
-        cursor.execute("SELECT id, project, task, assignee, status FROM tasks")
-        rows = cursor.fetchall()
-        if not rows:
-            bot.answer_callback_query(call.id, "لا توجد مهام مسجلة حالياً")
-            bot.send_message(call.message.chat.id, "📋 **سجل المهام المركزي:**\nلا توجد أي مهام مسجلة في قاعدة البيانات حتى الآن.")
-        else:
-            resp = "📋 **سجل مهام فريق النخبة النشط:**\n\n"
-            for r in rows:
-                resp += f"🔹 **رقم #{r[0]}** | **المشروع:** {r[1]}\n   📌 **المهمة:** {r[2]}\n   👤 **المسؤول:** {r[3]}\n   📊 **الحالة:** {r[4]}\n\n"
-            bot.send_message(call.message.chat.id, resp, parse_mode="Markdown")
-            
-    elif call.data == "add_task_prompt":
-        bot.send_message(call.message.chat.id, 
-                         "📌 **إضافة مهمة جديدة للمنظومة:**\n\n"
-                         "أرسل الأمر بهذا التنسيق المباشر:\n"
-                         "`/new المشروع | المهمة | المسؤول`\n\n"
-                         "مثال:\n`/new بوتات زيد | رفع ملخصات الفيزيا | سفيان اليونسي`", 
-                         parse_mode="Markdown")
-                         
-    elif call.data == "show_team":
-        team_text = (
-            "👥 **هيكل إدارة فريق النخبة:**\n\n"
-            "▪️ **همَّام الكانمي** -> المؤسس / الإدارة العليا\n"
-            "▪️ **سفيان اليونسي** -> رئيس العمليات / تطوير\n"
-            "▪️ **عبد القادر مجيد** -> إدارة المشاريع\n"
-            "▪️ **احميدة جمال** -> تنظيم الجداول والفعاليات\n"
-            "▪️ **علي النايلي** -> الدعم التقني"
-        )
-        bot.send_message(call.message.chat.id, team_text, parse_mode="Markdown")
+    user_name = call.from_user.first_name
+    username = f"(@{call.from_user.username})" if call.from_user.username else ""
+    user_id = call.from_user.id
+    
+    # تحديد توقيت ليبيا (أو توقيت السيرفر)
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_time = datetime.now().strftime("%H:%M")
+    
+    # مفتاح فريد للتأكد إن العضو ما يسجلش مرتين في نفس الفترة اليوم
+    record_key = f"{user_id}_{today}_{period}"
+    
+    if record_key in attendance_log:
+        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً لهذه الفترة!", show_alert=True)
+        return
         
-    elif call.data == "show_projects":
-        proj_text = (
-            "🌐 **مشاريع فريق النخبة المركزية:**\n\n"
-            "1️⃣ **بوتات زيد:** توزيع الملخصات والاختبارات الإلكترونية.\n"
-            "2️⃣ **مشروع فضاء:** تنظيم وتنسيق الجداول والفعاليات.\n"
-            "3️⃣ **مناهل العلم:** الأرشيف التعليمي للطلاب.\n"
-            "4️⃣ **الندوات واللقاءات:** مثل ويبينار سبيل الهمّة."
-        )
-        bot.send_message(call.message.chat.id, proj_text, parse_mode="Markdown")
-        
-    conn.close()
-
-@bot.message_handler(commands=['new'])
-def add_new_task(message):
+    # إضافة العضو لسجل الحضور
+    attendance_log.add(record_key)
+    
+    # 1. إرسال إشعار للمدير (لك أنت في الخاص)
+    admin_msg = (
+        f"📌 **تسجيل حضور جديد:**\n\n"
+        f"👤 **الاسم:** {user_name} {username}\n"
+        f"🕒 **الفترة:** {period}\n"
+        f"📅 **التاريخ:** {today}\n"
+        f"⏱ **الوقت:** {current_time}"
+    )
     try:
-        content = message.text.replace('/new', '').strip()
-        parts = content.split('|')
-        if len(parts) >= 3:
-            project = parts[0].strip()
-            task_desc = parts[1].strip()
-            assignee = parts[2].strip()
-            
-            conn = sqlite3.connect('elite_team.db', check_same_thread=False)
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO tasks (project, task, assignee, status) VALUES (?, ?, ?, ?)",
-                           (project, task_desc, assignee, "قيد العمل ⏳"))
-            conn.commit()
-            conn.close()
-            
-            bot.reply_to(message, f"✅ تم حفظ وتثبيت المهمة في قاعدة البيانات بنجاح لصالح ({assignee})!")
-        else:
-            bot.reply_to(message, "❌ الخطأ في التنسيق. استخدم الأمر هكذا:\n`/new المشروع | المهمة | المسؤول`", parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, "حدث خطأ أثناء حفظ المهمة في قاعدة البيانات.")
+        print("تأكد من إدخال الـ ID الخاص بك بشكل صحيح، وتأكد أنك قمت بمراسلة البوت بحسابك أولاً.")
+        
+    # 2. إرسال تأكيد للعضو نفسه
+    bot.answer_callback_query(call.id, "✅ تم تسجيل حضورك بنجاح!")
+    bot.send_message(call.message.chat.id, f"✅ **{user_name}**، تم إثبات حضورك اليوم للفترة {period}. بارك الله في جهودك!", parse_mode="Markdown")
 
-print("منظومة فريق النخبة المتكاملة تعمل الآن...")
+print("بوت الحضور يعمل الآن...")
 bot.infinity_polling()
