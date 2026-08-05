@@ -161,7 +161,7 @@ def get_main_inline_keyboard(user_id):
     btn_coupon_redeem = create_colored_btn("🎁 شحن كوبون هدية", callback_data="menu_redeem_prompt", style="success")
     markup.add(btn_q_create, btn_coupon_redeem)
 
-    btn_stats = create_colored_btn("📊 إحصائيات الحضور اليومية", callback_data="menu_stats", style="success")
+    btn_stats = create_colored_btn("📊 إحصائيات التحليل المتقدم", callback_data="menu_stats", style="success")
     btn_top = create_colored_btn("🏆 قائمة المتصدرين", callback_data="menu_leaderboard", style="success")
     markup.add(btn_stats, btn_top)
     
@@ -212,7 +212,7 @@ def send_welcome(message):
     markup = get_main_inline_keyboard(user_id)
     welcome_text = (
         f"✨ <b>مرحباً بك عزيزي {message.from_user.first_name}</b>\n\n"
-        f"<blockquote>📌 <i>أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، وسيقوم البوت بنشرها وتحديثها فوراً بالقناة.</i></blockquote>\n\n"
+        f"<blockquote>📌 <i>أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، مع تحليلات ذكية تفرق بين إجمالي التفاعلات والمستخدمين الفريدين.</i></blockquote>\n\n"
         f"⚠️ <b>تنبيه هام جداً:</b> ارفع البوت <b>مشرفاً (Admin)</b> في قناتك مع صلاحية (تعديل رسائل الآخرين وحذفها) لكي يعمل التحديث الفوري.\n\n"
         f"🔗 <b>رابط دعوتك الشخصي:</b>\n<code>https://t.me/{bot.get_me().username}?start={user_id}</code>\n\n"
         f"📊 <b>إجمالي زوار رابطك:</b> <code>{total_visits}</code> شخص\n"
@@ -220,6 +220,37 @@ def send_welcome(message):
         f"👇 <b>اختر ما تحتاجه من الأزرار الملونة أدناه:</b>"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="HTML", reply_markup=markup)
+
+@bot.message_handler(commands=['backup'])
+def cmd_backup(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+        return
+    if os.path.exists('roulette_bot.db'):
+        with open('roulette_bot.db', 'rb') as f:
+            bot.send_document(message.chat.id, f, caption="📦 <b>نسخة احتياطية لقاعدة البيانات (Backup)</b>", parse_mode="HTML")
+    else:
+        bot.reply_to(message, "❌ ملف قاعدة البيانات غير موجود.")
+
+@bot.message_handler(commands=['restore'])
+def cmd_restore(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+        return
+    user_states[ADMIN_ID] = "waiting_restore_file"
+    bot.reply_to(message, "📥 <b>أرسل الآن ملف قاعدة البيانات (.db) لاستعادة النسخة الاحتياطية (Restore):</b>", parse_mode="HTML")
+
+@bot.message_handler(content_types=['document'], func=lambda message: message.from_user.id == ADMIN_ID and user_states.get(ADMIN_ID) == "waiting_restore_file")
+def process_restore_file(message):
+    user_states.pop(ADMIN_ID, None)
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        with open('roulette_bot.db', 'wb') as f:
+            f.write(downloaded_file)
+        bot.reply_to(message, "✅ <b>تم استعادة قاعدة البيانات (Restore) بنجاح وبدء العمل بالنسخة الجديدة!</b>", parse_mode="HTML")
+    except Exception as e:
+        bot.reply_to(message, f"❌ <b>فشل استعادة قاعدة البيانات:</b> <code>{e}</code>", parse_mode="HTML")
 
 @bot.message_handler(commands=['points', 'رصيدي'])
 def cmd_points(message):
@@ -264,18 +295,18 @@ def show_profile_data(chat_id, user_id):
     channels_str = ", ".join([f"{c[0]} ({c[1]})" for c in saved_channels]) if saved_channels else "لا توجد قنوات مسجلة"
     
     profile_text = (
-        f"👤 <b>لوحة الملف الشخصي الإحصائي الشامل:</b>\n\n"
+        f"👤 <b>لوحة الملف الشخصي والإحصائيات الفردية:</b>\n\n"
         f"🌟 <b>الرصيد والرتبة:</b>\n"
         f"<blockquote>• رصيد النقاط: <code>{pts}</code> نقطة\n"
-        f"• الرتبة الحالية: المركز <code>{rank}</code> عالمياً</blockquote>\n\n"
+        f"• الرتبة العالمية: المركز <code>{rank}</code></blockquote>\n\n"
         f"📊 <b>سجل إجابات الأسئلة التفاعلية:</b>\n"
         f"<blockquote>• إجمالي الأسئلة المشارك بها: <code>{total_q}</code>\n"
         f"• الإجابات الصحيحة: <code>{correct_q}</code>\n"
-        f"• نسبة الدقة المئوية: <code>{accuracy}%</code></blockquote>\n\n"
+        f"• نسبة الدقة: <code>{accuracy}%</code></blockquote>\n\n"
         f"🌐 <b>القنوات والمجموعات المسجلة:</b>\n"
         f"<blockquote>{channels_str}</blockquote>\n\n"
-        f"🎁 <b>سجل الإنجازات والهدايا:</b>\n"
-        f"<blockquote>• الكوبونات المستخدمة مسبقاً: {coupons_str}</blockquote>"
+        f"🎁 <b>سجل الكوبونات المستخدمة:</b>\n"
+        f"<blockquote>{coupons_str}</blockquote>"
     )
     bot.send_message(chat_id, profile_text, parse_mode="HTML")
 
@@ -306,7 +337,7 @@ def show_admin_panel(chat_id):
         f"<blockquote>• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code>\n"
         f"• <b>إجمالي بوستات الحضور:</b> <code>{total_polls}</code>\n"
         f"• <b>إجمالي الكوبونات النشطة:</b> <code>{total_coupons}</code>\n"
-        f"• <b>حالة السيرفر:</b> يعمل بكفاءة عالية 🟢</blockquote>"
+        f"• <b>أوامر النظام المساعدة:</b> استخدم <code>/backup</code> لتحميل نسخة احتياطية أو <code>/restore</code> لاستعادة البيانات.</blockquote>"
     )
     bot.send_message(chat_id, admin_panel, parse_mode="HTML", reply_markup=markup)
 
@@ -362,7 +393,7 @@ def handle_menu_callbacks(call):
         bot.send_message(
             call.message.chat.id,
             "❓ <b>نظام الأسئلة التفاعلية المطوّر:</b>\n\n"
-            "<blockquote>أرسل الآن نص السؤال التفاعلي الذي تريد طرحه (مثال: عاصمة ليبيا هي؟):</blockquote>",
+            "<blockquote>أرسل الآن نص السؤال التفاعلي الذي تريد طرحه:</blockquote>",
             parse_mode="HTML"
         )
     
@@ -384,14 +415,18 @@ def handle_menu_callbacks(call):
         conn.close()
         
         if not user_polls:
-            bot.send_message(call.message.chat.id, "📊 <b>إحصائيات الحضور اليومية:</b>\n\n<blockquote>⚠️ لا توجد بوستات منشأة حتى الآن.</blockquote>", parse_mode="HTML")
+            bot.send_message(call.message.chat.id, "📊 <b>الإحصائيات والتحليلات المتقدمة:</b>\n\n<blockquote>⚠️ لا توجد بوستات منشأة حتى الآن.</blockquote>", parse_mode="HTML")
             return
             
-        stats_text = "📊 <b>سجل إحصائيات الحضور اليومية لبوستاتك:</b>\n\n<blockquote>اختر البوست من الأزرار أدناه لعرض الحاضرين لكل يوم مباشرة وبدون ملفات:</blockquote>"
+        stats_text = (
+            "📊 <b>إحصائيات وتحليلي المتقدم للبوستات والقنوات:</b>\n\n"
+            "<blockquote>💡 <i>توضيح البيانات (Unique vs Total): الأرقام أدناه توضح إجمالي التفاعلات، مع إمكانية استعراض المستخدمين الفريدين (Unique Reach) عند فتح تفاصيل كل بوست لتجنب تضخيم الأرقام الناتجة عن تداخل المشتركين.</i></blockquote>\n\n"
+            "👇 <i>اختر البوست المطلوب لمعاينة التحليلات المعمقة:</i>"
+        )
         markup = types.InlineKeyboardMarkup(row_width=1)
         for pid, title, cnt in user_polls:
             short_title = title[:25] + "..." if len(title) > 25 else title
-            markup.add(create_colored_btn(f"📌 {short_title} (حاضر: {cnt})", callback_data=f"view_stats_{pid}", style="success"))
+            markup.add(create_colored_btn(f"📌 {short_title} (إجمالي: {cnt})", callback_data=f"view_stats_{pid}", style="success"))
             
         bot.send_message(call.message.chat.id, stats_text, parse_mode="HTML", reply_markup=markup)
     
@@ -747,11 +782,16 @@ def view_poll_detailed_stats(call):
     title, count, end_time = poll
     cursor.execute("SELECT user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,))
     votes = cursor.fetchall()
+    
+    # حساب المستخدمين الفريدين (Unique Reach) وإجمالي التفاعلات لضبط قراءة الأرقام وتحليلها بدقة
+    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM poll_votes WHERE poll_id = ?", (poll_id,))
+    unique_users_count = cursor.fetchone()[0] or 0
+    
     cursor.execute("SELECT COUNT(*) FROM user_profiles")
     total_bot_users = cursor.fetchone()[0] or 1
     conn.close()
     
-    attendance_rate = round((count / total_bot_users) * 100, 1)
+    attendance_rate = round((unique_users_count / total_bot_users) * 100, 1)
     if attendance_rate > 100: attendance_rate = 100
     
     voters_str = ""
@@ -762,17 +802,19 @@ def view_poll_detailed_stats(call):
         voters_str = "<blockquote>• لم يسجل أحد حضوره حتى الآن.</blockquote>"
         
     stats_detail_msg = (
-        f"📊 <b>إحصائيات الحضور اليومية:</b>\n\n"
-        f"<blockquote>• <b>عنوان البوست اليومي:</b> <code>{title}</code>\n"
-        f"• <b>إجمالي الحاضرين:</b> <code>{count}</code> عضو\n"
-        f"• <b>نسبة الحضور التقريبية:</b> <code>{attendance_rate}%</code></blockquote>\n\n"
-        f"👥 <b>أسماء الحاضرين (بدون ملفات):</b>\n"
+        f"📊 <b>التحليلات المتقدمة وإحصائيات البوست:</b>\n\n"
+        f"<blockquote>• <b>عنوان البوست:</b> <code>{title}</code>\n"
+        f"• <b>إجمالي التفاعلات (Total):</b> <code>{count}</code> تفاعل\n"
+        f"• <b>الأشخاص الفريدون (Unique Reach):</b> <code>{unique_users_count}</code> مستخدم حقيقي\n"
+        f"• <b>معدل التفاعل الفعلي (Engagement Rate):</b> <code>{attendance_rate}%</code></blockquote>\n\n"
+        f"💡 <i>ملاحظة تحليلية: تم فصل الأرقام لتوضيح تداخل المشتركين بدقة وعكس الواقع الفعلي للتفاعل.</i>\n\n"
+        f"👥 <b>قائمة الحاضرين المسجلين:</b>\n"
         f"{voters_str}"
     )
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(create_colored_btn("📥 تحميل كشف الحضور (CSV)", callback_data=f"export_{poll_id}", style="primary"))
     markup.add(create_colored_btn("🗑️ حذف البوست نهائياً", callback_data=f"delete_poll_{poll_id}", style="danger"))
-    markup.add(create_colored_btn("🔙 العودة للقائمة", callback_data="menu_stats", style="success"))
+    markup.add(create_colored_btn("🔙 العودة للإحصائيات", callback_data="menu_stats", style="success"))
     
     bot.answer_callback_query(call.id)
     bot.edit_message_text(
@@ -1108,7 +1150,7 @@ def webhook_listener():
 
 @app.route("/")
 def index():
-    return "Bot is running perfectly!", 200
+    return "Bot is running perfectly with advanced analytics and backup systems!", 200
 
 if __name__ == "__main__":
     bot.remove_webhook()
