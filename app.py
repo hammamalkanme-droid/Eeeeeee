@@ -19,12 +19,17 @@ BOT_URL = "https://t.me/DaftarHQBot"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-try:
-  bot.remove_webhook()
-  bot.set_webhook(url=WEBHOOK_URL)
-  print("Webhook set successfully!")
-except Exception as e:
-  print(f"Error setting webhook: {e}")
+
+# مسار استقبال طلبات تيليجرام (Webhook)
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+  if request.headers.get("content-type") == "application/json":
+    json_string = request.get_data().decode("utf-8")
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "", 200
+  else:
+    return "Forbidden", 403
 
 
 def init_db():
@@ -85,7 +90,6 @@ def init_db():
                         user_id INTEGER PRIMARY KEY
                     )""")
 
-  # تم تحديث جدول الملفات الشخصية ليشمل وقت الانضمام للإحصائيات الدقيقة
   cursor.execute("""CREATE TABLE IF NOT EXISTS user_profiles (
                         user_id INTEGER PRIMARY KEY,
                         full_name TEXT,
@@ -93,7 +97,6 @@ def init_db():
                         joined_timestamp REAL DEFAULT 0
                     )""")
 
-  # جدول التفاعلات الجديد لإحصائيات النشاط
   cursor.execute("""CREATE TABLE IF NOT EXISTS interactions (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
@@ -188,7 +191,6 @@ init_db()
 user_states = {}
 
 
-# دالة تسجيل المستخدم التفاعلي وتتبع دخوله لأول مرة
 def log_user_interaction(user_id, username, first_name):
   conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
   cursor = conn.cursor()
@@ -390,10 +392,8 @@ def send_welcome(message):
   username = message.from_user.username or "لا يوجد"
   first_name = message.from_user.first_name
 
-  # تسجيل التفاعل ومعرفة إن كان المستخدم جديداً
   is_new = log_user_interaction(user_id, username, first_name)
 
-  # إرسال تنبيه فوري للمطور إذا كان المستخدم جديداً
   if is_new and user_id != ADMIN_ID:
     admin_alert = (
         f"🚨 <b>مستخدم جديد فتح البوت!</b>\n\n👤 <b>الاسم:</b>"
@@ -473,7 +473,6 @@ def send_welcome(message):
   )
 
 
-# أمر الإحصائيات الشامل الجديد (/stats للمشرف)
 @bot.message_handler(commands=["stats"])
 def cmd_bot_statistics(message):
   if message.from_user.id != ADMIN_ID:
@@ -489,7 +488,6 @@ def cmd_bot_statistics(message):
   week_ago_ts = time.time() - (7 * 24 * 60 * 60)
   month_ago_ts = time.time() - (30 * 24 * 60 * 60)
 
-  # إحصائيات المستخدمين الجدد
   cursor.execute("SELECT COUNT(*) FROM user_profiles")
   total_users = cursor.fetchone()[0]
 
@@ -511,7 +509,6 @@ def cmd_bot_statistics(message):
   )
   users_month = cursor.fetchone()[0]
 
-  # إحصائيات التفاعلات والنشاط
   cursor.execute("SELECT COUNT(*) FROM interactions")
   total_interactions = cursor.fetchone()[0]
 
@@ -791,69 +788,122 @@ def show_admin_panel(chat_id):
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_manage_coupons")
 def admin_manage_coupons(call):
-    if call.from_user.id != ADMIN_ID:
-        return
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        create_colored_btn("➕ إضافة كوبون جديد", callback_data="admin_add_coupon", style="success"),
-        create_colored_btn("🗑️ حذف كوبون", callback_data="admin_delete_coupon", style="danger")
-    )
-    bot.edit_message_text("🎁 <b>إدارة الكوبونات والهدايا:</b>\nاختر الإجراء المطلوب:", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML", reply_markup=markup)
+  if call.from_user.id != ADMIN_ID:
+    return
+  markup = types.InlineKeyboardMarkup(row_width=2)
+  markup.add(
+      create_colored_btn(
+          "➕ إضافة كوبون جديد",
+          callback_data="admin_add_coupon",
+          style="success",
+      ),
+      create_colored_btn(
+          "🗑️ حذف كوبون", callback_data="admin_delete_coupon", style="danger"
+      ),
+  )
+  bot.edit_message_text(
+      "🎁 <b>إدارة الكوبونات والهدايا:</b>\nاختر الإجراء المطلوب:",
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
+      parse_mode="HTML",
+      reply_markup=markup,
+  )
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_add_coupon")
 def admin_add_coupon_start(call):
-    user_states[ADMIN_ID] = {"step": "waiting_coupon_code"}
-    bot.send_message(ADMIN_ID, "📝 أرسل الآن **كود الكوبون** (مثال: FREE50):", parse_mode="HTML")
+  user_states[ADMIN_ID] = {"step": "waiting_coupon_code"}
+  bot.send_message(
+      ADMIN_ID, "📝 أرسل الآن **كود الكوبون** (مثال: FREE50):", parse_mode="HTML"
+  )
 
-@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and isinstance(user_states.get(ADMIN_ID), dict) and user_states.get(ADMIN_ID).get("step") == "waiting_coupon_code")
+
+@bot.message_handler(
+    func=lambda message: message.from_user.id == ADMIN_ID
+    and isinstance(user_states.get(ADMIN_ID), dict)
+    and user_states.get(ADMIN_ID).get("step") == "waiting_coupon_code"
+)
 def admin_add_coupon_code(message):
-    user_states[ADMIN_ID]["code"] = message.text.strip()
-    user_states[ADMIN_ID]["step"] = "waiting_coupon_points"
-    bot.reply_to(message, "💰 كم **عدد النقاط** التي سيمنحها هذا الكوبون؟ (أرسل رقماً):")
+  user_states[ADMIN_ID]["code"] = message.text.strip()
+  user_states[ADMIN_ID]["step"] = "waiting_coupon_points"
+  bot.reply_to(message, "💰 كم **عدد النقاط** التي سيمنحها هذا الكوبون؟ (أرسل رقماً):")
 
-@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and isinstance(user_states.get(ADMIN_ID), dict) and user_states.get(ADMIN_ID).get("step") == "waiting_coupon_points")
+
+@bot.message_handler(
+    func=lambda message: message.from_user.id == ADMIN_ID
+    and isinstance(user_states.get(ADMIN_ID), dict)
+    and user_states.get(ADMIN_ID).get("step") == "waiting_coupon_points"
+)
 def admin_add_coupon_points(message):
-    try:
-        points = int(message.text.strip())
-        user_states[ADMIN_ID]["points"] = points
-        user_states[ADMIN_ID]["step"] = "waiting_coupon_uses"
-        bot.reply_to(message, "👥 كم **عدد مرات الاستخدام** المسموحة لهذا الكوبون؟ (مثال: 100):")
-    except ValueError:
-        bot.reply_to(message, "❌ يرجى إرسال أرقام فقط.")
+  try:
+    points = int(message.text.strip())
+    user_states[ADMIN_ID]["points"] = points
+    user_states[ADMIN_ID]["step"] = "waiting_coupon_uses"
+    bot.reply_to(
+        message,
+        "👥 كم **عدد مرات الاستخدام** المسموحة لهذا الكوبون؟ (مثال: 100):",
+    )
+  except ValueError:
+    bot.reply_to(message, "❌ يرجى إرسال أرقام فقط.")
 
-@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and isinstance(user_states.get(ADMIN_ID), dict) and user_states.get(ADMIN_ID).get("step") == "waiting_coupon_uses")
+
+@bot.message_handler(
+    func=lambda message: message.from_user.id == ADMIN_ID
+    and isinstance(user_states.get(ADMIN_ID), dict)
+    and user_states.get(ADMIN_ID).get("step") == "waiting_coupon_uses"
+)
 def admin_add_coupon_uses(message):
-    try:
-        max_uses = int(message.text.strip())
-        code = user_states[ADMIN_ID]["code"]
-        points = user_states[ADMIN_ID]["points"]
-        
-        conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO coupons (code, points, max_uses, uses_count, is_closed) VALUES (?, ?, ?, 0, 0)", (code, points, max_uses))
-        conn.commit()
-        conn.close()
-        
-        user_states.pop(ADMIN_ID, None)
-        bot.reply_to(message, f"✅ **تم إضافة الكوبون بنجاح!**\n\nالكود: <code>{code}</code>\nالنقاط: {points}\nمرات الاستخدام: {max_uses}", parse_mode="HTML")
-    except ValueError:
-        bot.reply_to(message, "❌ يرجى إرسال أرقام فقط.")
+  try:
+    max_uses = int(message.text.strip())
+    code = user_states[ADMIN_ID]["code"]
+    points = user_states[ADMIN_ID]["points"]
+
+    conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO coupons (code, points, max_uses, uses_count,"
+        " is_closed) VALUES (?, ?, ?, 0, 0)",
+        (code, points, max_uses),
+    )
+    conn.commit()
+    conn.close()
+
+    user_states.pop(ADMIN_ID, None)
+    bot.reply_to(
+        message,
+        f"✅ **تم إضافة الكوبون بنجاح!**\n\nالكود: <code>{code}</code>\nالنقاط:"
+        f" {points}\nمرات الاستخدام: {max_uses}",
+        parse_mode="HTML",
+    )
+  except ValueError:
+    bot.reply_to(message, "❌ يرجى إرسال أرقام فقط.")
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_delete_coupon")
 def admin_delete_coupon_start(call):
-    user_states[ADMIN_ID] = "waiting_delete_coupon_code"
-    bot.send_message(ADMIN_ID, "🗑️ أرسل **كود الكوبون** الذي تريد حذفه أو إيقافه:", parse_mode="HTML")
+  user_states[ADMIN_ID] = "waiting_delete_coupon_code"
+  bot.send_message(
+      ADMIN_ID,
+      "🗑️ أرسل **كود الكوبون** الذي تريد حذفه أو إيقافه:",
+      parse_mode="HTML",
+  )
 
-@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and user_states.get(ADMIN_ID) == "waiting_delete_coupon_code")
+
+@bot.message_handler(
+    func=lambda message: message.from_user.id == ADMIN_ID
+    and user_states.get(ADMIN_ID) == "waiting_delete_coupon_code"
+)
 def admin_delete_coupon_execute(message):
-    code = message.text.strip()
-    conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM coupons WHERE code = ?", (code,))
-    conn.commit()
-    conn.close()
-    user_states.pop(ADMIN_ID, None)
-    bot.reply_to(message, f"✅ تم حذف الكوبون <code>{code}</code> بنجاح.", parse_mode="HTML")
+  code = message.text.strip()
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("DELETE FROM coupons WHERE code = ?", (code,))
+  conn.commit()
+  conn.close()
+  user_states.pop(ADMIN_ID, None)
+  bot.reply_to(
+      message, f"✅ تم حذف الكوبون <code>{code}</code> بنجاح.", parse_mode="HTML"
+  )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_set_forced_channel")
@@ -1068,7 +1118,7 @@ def handle_menu_callbacks(call):
             ORDER BY r.visits_count DESC LIMIT 5
         """)
     top_users = cursor.fetchall()
-    
+
     cursor.execute("""
             SELECT tp.user_id, tp.points, p.full_name, b.badge_icon 
             FROM user_points tp 
@@ -1080,8 +1130,11 @@ def handle_menu_callbacks(call):
     top_points = cursor.fetchall()
     conn.close()
 
-    leaderboard_text = "🏆 <b>قوائم المتصدرين في البوت:</b>\n\n🔗 <b>أكثر المستخدمين جلباً للزوار:</b>\n"
-    
+    leaderboard_text = (
+        "🏆 <b>قوائم المتصدرين في البوت:</b>\n\n🔗 <b>أكثر المستخدمين جلباً"
+        " للزوار:</b>\n"
+    )
+
     if not top_users:
       leaderboard_text += "<blockquote>• لا توجد بيانات حتى الآن..</blockquote>\n\n"
     else:
@@ -1089,27 +1142,39 @@ def handle_menu_callbacks(call):
       for i, (uid, count, fname) in enumerate(top_users):
         medal = medals[i] if i < len(medals) else "🔹"
         name_display = html.escape(fname) if fname else f"مستخدم {uid}"
-        # تم إزالة المعرف (Username) نهائياً
-        leaderboard_text += f"<blockquote>{medal} <b>{name_display}</b> — <b>{count}</b> زائر</blockquote>\n"
+        leaderboard_text += (
+            f"<blockquote>{medal} <b>{name_display}</b> — <b>{count}</b>"
+            " زائر</blockquote>\n"
+        )
       leaderboard_text += "\n"
 
     leaderboard_text += "🌟 <b>أكثر الأعضاء تفاعلاً ونقاطاً والأوسمة:</b>\n"
-    
+
     if not top_points:
-      leaderboard_text += "<blockquote>• لا توجد نقاط مسجلة حتى الآن..</blockquote>"
+      leaderboard_text += (
+          "<blockquote>• لا توجد نقاط مسجلة حتى الآن..</blockquote>"
+      )
     else:
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
       for i, (uid, pts, fname, b_icon) in enumerate(top_points):
         medal = medals[i] if i < len(medals) else "🔹"
         icon = b_icon if b_icon else "🏅"
         name_display = html.escape(fname) if fname else f"مستخدم {uid}"
-        # تم إزالة المعرف (Username) نهائياً
-        leaderboard_text += f"<blockquote>{medal} {icon} <b>{name_display}</b> — <b>{pts}</b> نقطة</blockquote>\n"
+        leaderboard_text += (
+            f"<blockquote>{medal} {icon} <b>{name_display}</b> — <b>{pts}</b>"
+            " نقطة</blockquote>\n"
+        )
 
     try:
-      bot.send_message(call.message.chat.id, leaderboard_text, parse_mode="HTML")
+      bot.send_message(
+          call.message.chat.id, leaderboard_text, parse_mode="HTML"
+      )
     except Exception as e:
-      bot.send_message(call.message.chat.id, f"❌ حدث خطأ داخلي في عرض اللوحة: <code>{e}</code>", parse_mode="HTML")
+      bot.send_message(
+          call.message.chat.id,
+          f"❌ حدث خطأ داخلي في عرض اللوحة: <code>{e}</code>",
+          parse_mode="HTML",
+      )
 
   elif action == "points":
     bot.answer_callback_query(call.id)
@@ -1163,7 +1228,9 @@ def handle_weekly_supervisor_report(call):
   channels = cursor.fetchall()
 
   if not channels:
-    bot.answer_callback_query(call.id, "❌ لم تقم بإضافة أي قنوات بعد.", show_alert=True)
+    bot.answer_callback_query(
+        call.id, "❌ لم تقم بإضافة أي قنوات بعد.", show_alert=True
+    )
     conn.close()
     return
 
@@ -1372,7 +1439,11 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
 
   try:
     sent_msg = bot.send_message(
-        real_channel_id, msg_content, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True
+        real_channel_id,
+        msg_content,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
     )
 
     cursor.execute(
@@ -1534,7 +1605,9 @@ def process_coupon_text_input(message):
       "SELECT * FROM coupon_uses WHERE code = ? AND user_id = ?", (code, user_id)
   )
   if cursor.fetchone():
-    bot.reply_to(message, "⚠️ <b>لقد استخدمت هذا الكوبون مسبقاً!</b>", parse_mode="HTML")
+    bot.reply_to(
+        message, "⚠️ <b>لقد استخدمت هذا الكوبون مسبقاً!</b>", parse_mode="HTML"
+    )
     conn.close()
     return
   cursor.execute(
@@ -1626,10 +1699,18 @@ def q_step_opt_d(message):
   user_states[user_id]["step"] = "waiting_correct_opt"
   markup = types.InlineKeyboardMarkup(row_width=2)
   markup.add(
-      create_colored_btn("الخيار (أ)", callback_data="q_correct_A", style="success"),
-      create_colored_btn("الخيار (ب)", callback_data="q_correct_B", style="success"),
-      create_colored_btn("الخيار (ج)", callback_data="q_correct_C", style="success"),
-      create_colored_btn("الخيار (د)", callback_data="q_correct_D", style="success"),
+      create_colored_btn(
+          "الخيار (أ)", callback_data="q_correct_A", style="success"
+      ),
+      create_colored_btn(
+          "الخيار (ب)", callback_data="q_correct_B", style="success"
+      ),
+      create_colored_btn(
+          "الخيار (ج)", callback_data="q_correct_C", style="success"
+      ),
+      create_colored_btn(
+          "الخيار (د)", callback_data="q_correct_D", style="success"
+      ),
   )
   bot.reply_to(
       message,
@@ -1643,7 +1724,9 @@ def q_step_opt_d(message):
 def q_step_correct_chosen(call):
   user_id = call.from_user.id
   if user_id not in user_states or not isinstance(user_states[user_id], dict):
-    bot.answer_callback_query(call.id, "❌ انتهت الجلسة، ابدأ من جديد.", show_alert=True)
+    bot.answer_callback_query(
+        call.id, "❌ انتهت الجلسة، ابدأ من جديد.", show_alert=True
+    )
     return
   correct_opt = call.data.replace("q_correct_", "")
   user_states[user_id]["correct_opt"] = correct_opt
@@ -1677,10 +1760,18 @@ def q_step_publish(message):
 
   keyboard = types.InlineKeyboardMarkup(row_width=2)
   keyboard.add(
-      create_colored_btn(f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"),
-      create_colored_btn(f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"),
-      create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
-      create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary"),
+      create_colored_btn(
+          f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"
+      ),
+      create_colored_btn(
+          f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"
+      ),
+      create_colored_btn(
+          f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"
+      ),
+      create_colored_btn(
+          f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary"
+      ),
   )
   keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
 
@@ -1695,7 +1786,11 @@ def q_step_publish(message):
 
   try:
     sent_msg = bot.send_message(
-        channel_input, q_msg_content, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True
+        channel_input,
+        q_msg_content,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
     )
     conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -1878,10 +1973,18 @@ def handle_question_answer(call):
     )
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        create_colored_btn(f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"),
-        create_colored_btn(f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"),
-        create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
-        create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary"),
+        create_colored_btn(
+            f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"
+        ),
+        create_colored_btn(
+            f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"
+        ),
+        create_colored_btn(
+            f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"
+        ),
+        create_colored_btn(
+            f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary"
+        ),
     )
     keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
     bot.edit_message_text(
@@ -1890,7 +1993,7 @@ def handle_question_answer(call):
         text=updated_q_content,
         parse_mode="HTML",
         reply_markup=keyboard,
-        disable_web_page_preview=True
+        disable_web_page_preview=True,
     )
   except Exception as e:
     print(f"Error updating speed race message: {e}")
@@ -2336,3 +2439,15 @@ def send_weekly_report_to_admin():
       top_day_str = f"{top_day_row[0]} - التفاعلات: {top_day_row[1]}"
   else:
     top_day_str = "لا توجد بيانات كافية"
+
+
+if __name__ == "__main__":
+  try:
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    print("Webhook set successfully!")
+  except Exception as e:
+    print(f"Error setting webhook: {e}")
+
+  port = int(os.environ.get("PORT", 8080))
+  app.run(host="0.0.0.0", port=port)
