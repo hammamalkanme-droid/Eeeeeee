@@ -57,6 +57,47 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS referrals (owner_id INTEGER PRIMARY KEY, visits_count INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS user_referral_logs (owner_id INTEGER, visitor_id INTEGER, PRIMARY KEY (owner_id, visitor_id))')
     cursor.execute('CREATE TABLE IF NOT EXISTS user_points (user_id INTEGER PRIMARY KEY, points INTEGER DEFAULT 0)')
+    
+    # جداول الكوبونات والهدايا الجديدة
+    cursor.execute('''CREATE TABLE IF NOT EXISTS coupons (
+                        code TEXT PRIMARY KEY,
+                        points INTEGER,
+                        max_uses INTEGER,
+                        uses_count INTEGER DEFAULT 0,
+                        expires_at REAL,
+                        is_closed INTEGER DEFAULT 0
+                    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS coupon_uses (
+                        code TEXT,
+                        user_id INTEGER,
+                        PRIMARY KEY (code, user_id)
+                    )''')
+    
+    # جداول الأسئلة التفاعلية المطورة
+    cursor.execute('''CREATE TABLE IF NOT EXISTS questions (
+                        question_id TEXT PRIMARY KEY,
+                        owner_id INTEGER,
+                        question_text TEXT,
+                        opt_a TEXT,
+                        opt_b TEXT,
+                        opt_c TEXT,
+                        opt_d TEXT,
+                        correct_opt TEXT,
+                        channel_id TEXT,
+                        message_id INTEGER,
+                        is_closed INTEGER DEFAULT 0
+                    )''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS question_answers (
+                        question_id TEXT,
+                        user_id INTEGER,
+                        selected_option TEXT,
+                        is_correct INTEGER,
+                        earned_points INTEGER,
+                        PRIMARY KEY (question_id, user_id)
+                    )''')
+    
     conn.commit()
     conn.close()
 
@@ -92,13 +133,20 @@ def get_main_inline_keyboard(user_id):
     btn_share = create_colored_btn("🚀 نشر بوست جديد بالقناة", callback_data="menu_share", style="primary")
     markup.add(btn_settings, btn_share)
     
+    btn_q_create = create_colored_btn("❓ طرح سؤال تفاعلي", callback_data="menu_create_question", style="success")
+    btn_coupon_redeem = create_colored_btn("🎁 شحن كوبون هدية", callback_data="menu_redeem_prompt", style="success")
+    markup.add(btn_q_create, btn_coupon_redeem)
+
     btn_stats = create_colored_btn("📊 إحصائيات الحضور اليومية", callback_data="menu_stats", style="success")
     btn_top = create_colored_btn("🏆 قائمة المتصدرين", callback_data="menu_leaderboard", style="success")
     markup.add(btn_stats, btn_top)
     
     btn_points = create_colored_btn("🌟 لوحة النقاط", callback_data="menu_points", style="success")
+    btn_profile = create_colored_btn("👤 الملف الشخصي (/profile)", callback_data="menu_profile", style="primary")
+    markup.add(btn_points, btn_profile)
+
     btn_support = create_colored_btn("🛠️ الدعم والمساعدة", callback_data="menu_support", style="success")
-    markup.add(btn_points, btn_support)
+    markup.add(btn_support)
     
     if user_id == ADMIN_ID:
         btn_admin = create_colored_btn("👑 لوحة تحكم المشرف", callback_data="menu_admin", style="danger")
@@ -141,7 +189,7 @@ def send_welcome(message):
     markup = get_main_inline_keyboard(user_id)
     welcome_text = (
         f"✨ **مرحباً بك عزيزي {message.from_user.first_name}**\n\n"
-        f"> 📌 *أنشئ بوستات الحضور بكل احترافية، وسيقوم البوت بنشرها وتحديثها فوراً بالقناة لضمان عمل الأزرار وتتبع الحاضرين بدقة.*\n\n"
+        f"> 📌 *أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، وسيقوم البوت بنشرها وتحديثها فوراً بالقناة.*\n\n"
         f"⚠️ **تنبيه هام جداً:** ارفع البوت **مشرفاً (Admin)** في قناتك مع صلاحية (تعديل رسائل الآخرين وحذفها) لكي يعمل التحديث الفوري.\n\n"
         f"🔗 **رابط دعوتك الشخصي:**\n`https://t.me/{bot.get_me().username}?start={user_id}`\n\n"
         f"📊 **إجمالي زوار رابطك:** `{total_visits}` شخص\n"
@@ -160,6 +208,160 @@ def cmd_points(message):
     pts = res[0] if res else 0
     conn.close()
     bot.reply_to(message, f"🌟 **رصيدك الحالي:** `{pts}` نقطة.", parse_mode="Markdown")
+
+# ميزة الملف الشخصي الشامل (/profile)
+@bot.message_handler(commands=['profile'])
+def cmd_profile(message):
+    user_id = message.from_user.id
+    show_profile_data(message.chat.id, user_id)
+
+def show_profile_data(chat_id, user_id):
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    # الرصيد والنقاط
+    cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+    p_res = cursor.fetchone()
+    pts = p_res[0] if p_res else 0
+    
+    # حساب الرتبة بناء على النقاط
+    cursor.execute("SELECT COUNT(*) FROM user_points WHERE points > ?", (pts,))
+    higher_users = cursor.fetchone()[0]
+    rank = higher_users + 1
+    
+    # سجل الإجابات على الأسئلة
+    cursor.execute("SELECT COUNT(*), SUM(is_correct) FROM question_answers WHERE user_id = ?", (user_id,))
+    q_res = cursor.fetchone()
+    total_q = q_res[0] if q_res and q_res[0] else 0
+    correct_q = q_res[1] if q_res and q_res[1] else 0
+    accuracy = round((correct_q / total_q) * 100, 1) if total_q > 0 else 0.0
+    
+    # الأنشطة والقنوات (بوستات الحضور والأسئلة المتفاعلة فيها)
+    cursor.execute("SELECT channel_id FROM polls WHERE owner_id = ?", (user_id,))
+    channels = [row[0] for row in cursor.fetchall()]
+    
+    # الكوبونات والإنجازات السابقة
+    cursor.execute("SELECT code FROM coupon_uses WHERE user_id = ?", (user_id,))
+    used_coupons = [row[0] for row in cursor.fetchall()]
+    
+    conn.close()
+    
+    coupons_str = ", ".join(used_coupons) if used_coupons else "لا توجد"
+    channels_str = f"إجمالي {len(set(channels))} قناة/مجموعة" if channels else "لا توجد قنوات مسجلة"
+    
+    profile_text = (
+        f"👤 **لوحة الملف الشخصي الإحصائي الشامل:**\n\n"
+        f"🌟 **الرصيد والرتبة:**\n"
+        f"> • رصيد النقاط: `{pts}` نقطة\n"
+        f"> • الرتبة الحالية: المركز `{rank}` عالمياً\n\n"
+        f"📊 **سجل إجابات الأسئلة التفاعلية:**\n"
+        f"> • إجمالي الأسئلة المشارك بها: `{total_q}`\n"
+        f"> • الإجابات الصحيحة: `{correct_q}`\n"
+        f"> • نسبة الدقة المئوية: `{accuracy}%`\n\n"
+        f"🌐 **النشاط والقنوات:**\n"
+        f"> • القنوات والمجموعات المتفاعل ضمنها: `{channels_str}`\n\n"
+        f"🎁 **سجل الإنجازات والهدايا:**\n"
+        f"> • الكوبونات المستخدمة مسبقاً: `{coupons_str}`"
+    )
+    bot.send_message(chat_id, profile_text, parse_mode="Markdown")
+
+# نظام الكوبونات والهدايا (أوامر المشرفين)
+@bot.message_handler(commands=['createcode'])
+def cmd_create_code(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+        return
+    
+    args = message.text.split()
+    if len(args) < 4:
+        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n`/createcode [الكود] [النقاط] [عدد_المرات]`\nمثال: `/createcode WELCOME 50 20`", parse_mode="Markdown")
+        return
+    
+    code = args[1].strip()
+    try:
+        points = int(args[2])
+        max_uses = int(args[3])
+    except ValueError:
+        bot.reply_to(message, "❌ النقاط وعدد مرات الاستخدام يجب أن تكون أرقاماً صحيحة.")
+        return
+    
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO coupons (code, points, max_uses, uses_count, expires_at, is_closed) VALUES (?, ?, ?, 0, 0, 0)", 
+                       (code, points, max_uses))
+        conn.commit()
+        bot.reply_to(message, f"✅ **تم إنشاء الكوبون بنجاح!**\n\n> • الكود: `{code}`\n> • النقاط الممنوحة: `{points}`\n> • عدد مرات الاستخدام المتاحة: `{max_uses}`", parse_mode="Markdown")
+    except sqlite3.IntegrityError:
+        bot.reply_to(message, "❌ هذا الكود موجود مسبقاً، اختر كوداً آخر.")
+    finally:
+        conn.close()
+
+@bot.message_handler(commands=['closecode'])
+def cmd_close_code(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+        return
+    
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n`/closecode [الكود]`", parse_mode="Markdown")
+        return
+    
+    code = args[1].strip()
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE coupons SET is_closed = 1 WHERE code = ?", (code,))
+    if cursor.rowcount > 0:
+        conn.commit()
+        bot.reply_to(message, f"🔒 **تم إغلاق الكود `{code}` يدوياً بنجاح.**", parse_mode="Markdown")
+    else:
+        bot.reply_to(message, "❌ هذا الكود غير موجود.")
+    conn.close()
+
+@bot.message_handler(commands=['redeem', 'شحن'])
+def cmd_redeem(message):
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n`/redeem [الكود]`\nأو أرسل الكود مباشرة.", parse_mode="Markdown")
+        return
+    code = args[1].strip()
+    process_coupon_redemption(message, code)
+
+def process_coupon_redemption(message, code):
+    user_id = message.from_user.id
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT points, max_uses, uses_count, is_closed FROM coupons WHERE code = ?", (code,))
+    coupon = cursor.fetchone()
+    
+    if not coupon:
+        bot.reply_to(message, "❌ الكود المدخل غير صحيح أو غير موجود.")
+        conn.close()
+        return
+        
+    points, max_uses, uses_count, is_closed = coupon
+    
+    if is_closed == 1 or uses_count >= max_uses:
+        bot.reply_to(message, "⌛ عذراً، هذا الكود منتهي الصلاحية أو استنفد عدد مرات الاستخدام المسموحة.")
+        conn.close()
+        return
+        
+    cursor.execute("SELECT * FROM coupon_uses WHERE code = ? AND user_id = ?", (code, user_id))
+    if cursor.fetchone():
+        bot.reply_to(message, "⚠️ لقد قمت باستخدام هذا الكود مسبقاً ولا يمكنك استخدامه مرتين!")
+        conn.close()
+        return
+        
+    # تنفيذ الشحن
+    cursor.execute("INSERT INTO coupon_uses (code, user_id) VALUES (?, ?)", (code, user_id))
+    cursor.execute("UPDATE coupons SET uses_count = uses_count + 1 WHERE code = ?", (code,))
+    cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?", (user_id, points, points))
+    conn.commit()
+    conn.close()
+    
+    bot.reply_to(message, f"🎉 **مبروك! تم شحن الكود بنجاح.**\n\n> • حصلت على: **{points} نقطة** رصيد جديد.", parse_mode="Markdown")
 
 @bot.message_handler(commands=['backup'])
 def backup_database(message):
@@ -202,6 +404,8 @@ def cmd_admin(message):
     total_users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM polls")
     total_polls = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM coupons")
+    total_coupons = cursor.fetchone()[0]
     conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -211,6 +415,7 @@ def cmd_admin(message):
         f"👑 **لوحة تحكم المشرف العامة:**\n\n"
         f"> • **إجمالي المستخدمين المسجلين:** `{total_users}`\n"
         f"> • **إجمالي بوستات الحضور:** `{total_polls}`\n"
+        f"> • **إجمالي الكوبونات النشطة:** `{total_coupons}`\n"
         f"> • **حالة السيرفر:** `يعمل بكفاءة عالية 🟢`"
     )
     bot.send_message(message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
@@ -238,6 +443,25 @@ def handle_menu_callbacks(call):
             parse_mode="Markdown"
         )
     
+    elif action == "create_question":
+        bot.answer_callback_query(call.id)
+        user_states[user_id] = "waiting_q_text"
+        bot.send_message(
+            call.message.chat.id,
+            "❓ **نظام الأسئلة التفاعلية المطوّر:**\n\n"
+            "> *أرسل الآن نص السؤال التفاعلي الذي تريد طرحه (مثال: عاصمة ليبيا هي؟):*",
+            parse_mode="Markdown"
+        )
+    
+    elif action == "redeem_prompt":
+        bot.answer_callback_query(call.id)
+        user_states[user_id] = "waiting_coupon_input"
+        bot.send_message(call.message.chat.id, "🎁 *أرسل الآن كود الكوبون أو الهدية لشحنه ورصيدك فوراً:*", parse_mode="Markdown")
+        
+    elif action == "profile":
+        bot.answer_callback_query(call.id)
+        show_profile_data(call.message.chat.id, user_id)
+
     elif action == "stats":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
@@ -300,7 +524,7 @@ def handle_menu_callbacks(call):
         points_msg = (
             f"🌟 **نظام النقاط والمكافآت:**\n\n"
             f"> • رصيدك الحالي هو: **{pts} نقطة**\n"
-            f"> • تحصل على النقاط تلقائياً كلما قمت بتسجيل حضورك في بوستات الحضور داخل القنوات والمجموعات!\n"
+            f"> • تحصل على النقاط تلقائياً كلما قمت بتسجيل حضورك أو الإجابة الصحيحة على الأسئلة التفاعلية!\n"
         )
         bot.send_message(call.message.chat.id, points_msg, parse_mode="Markdown")
     
@@ -332,6 +556,180 @@ def handle_menu_callbacks(call):
             f"> • **حالة السيرفر:** `يعمل بكفاءة عالية 🟢`"
         )
         bot.send_message(call.message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
+
+# معالجة إدخال كود الكوبون عبر المحادثة العادية
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_coupon_input")
+def process_coupon_text_input(message):
+    user_id = message.from_user.id
+    code = message.text.strip()
+    user_states.pop(user_id, None)
+    process_coupon_redemption(message, code)
+
+# معالجات إنشاء الأسئلة التفاعلية المطورة
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_q_text")
+def q_step_text(message):
+    user_id = message.from_user.id
+    q_text = message.text.strip()
+    user_states[user_id] = {"q_text": q_text, "step": "waiting_opt_a"}
+    bot.reply_to(message, "📌 *أرسل الآن الخيار الأول (أ):*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[message.from_user.id].get("step") == "waiting_opt_a")
+def q_step_opt_a(message):
+    user_id = message.from_user.id
+    user_states[user_id]["opt_a"] = message.text.strip()
+    user_states[user_id]["step"] = "waiting_opt_b"
+    bot.reply_to(message, "📌 *أرسل الآن الخيار الثاني (ب):*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_opt_b")
+def q_step_opt_b(message):
+    user_id = message.from_user.id
+    user_states[user_id]["opt_b"] = message.text.strip()
+    user_states[user_id]["step"] = "waiting_opt_c"
+    bot.reply_to(message, "📌 *أرسل الآن الخيار الثالث (ج):*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_opt_c")
+def q_step_opt_c(message):
+    user_id = message.from_user.id
+    user_states[user_id]["opt_c"] = message.text.strip()
+    user_states[user_id]["step"] = "waiting_opt_d"
+    bot.reply_to(message, "📌 *أرسل الآن الخيار الرابع (د):*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_opt_d")
+def q_step_opt_d(message):
+    user_id = message.from_user.id
+    user_states[user_id]["opt_d"] = message.text.strip()
+    user_states[user_id]["step"] = "waiting_correct_opt"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        create_colored_btn("الخيار (أ)", callback_data="q_correct_A", style="success"),
+        create_colored_btn("الخيار (ب)", callback_data="q_correct_B", style="success"),
+        create_colored_btn("الخيار (ج)", callback_data="q_correct_C", style="success"),
+        create_colored_btn("الخيار (د)", callback_data="q_correct_D", style="success")
+    )
+    bot.reply_to(message, "🎯 *اختر الإجابة الصحيحة من الأزرار أدناه:*", parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("q_correct_"))
+def q_step_correct_chosen(call):
+    user_id = call.from_user.id
+    if user_id not in user_states or not isinstance(user_states[user_id], dict):
+        bot.answer_callback_query(call.id, "❌ انتهت الجلسة، ابدأ من جديد.", show_alert=True)
+        return
+    
+    correct_opt = call.data.replace("q_correct_", "")
+    user_states[user_id]["correct_opt"] = correct_opt
+    user_states[user_id]["step"] = "waiting_q_channel"
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "🚀 *أرسل الآن معرف قناتك لنشر السؤال التفاعلي فيها (مثال: `@MyChannel`):*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.from_user.id in user_states and isinstance(user_states[message.from_user.id], dict) and user_states[user_id := message.from_user.id].get("step") == "waiting_q_channel")
+def q_step_publish(message):
+    user_id = message.from_user.id
+    channel_input = message.text.strip()
+    q_data = user_states.pop(user_id, None)
+    
+    question_id = f"q_{user_id}_{int(time.time())}"
+    q_text = q_data["q_text"]
+    oa = q_data["opt_a"]
+    ob = q_data["opt_b"]
+    oc = q_data["opt_c"]
+    od = q_data["opt_d"]
+    correct_opt = q_data["correct_opt"]
+    
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        create_colored_btn(f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"),
+        create_colored_btn(f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"),
+        create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
+        create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary")
+    )
+    
+    q_msg_content = (
+        f"💡 **سؤال تفاعلي جديد:**\n\n"
+        f"📌 **{html.escape(q_text)}**\n\n"
+        f"🔹 أ) {html.escape(oa)}\n"
+        f"🔹 ب) {html.escape(ob)}\n"
+        f"🔹 ج) {html.escape(oc)}\n"
+        f"🔹 د) {html.escape(od)}\n\n"
+        f"<i>⏱️ اختر الإجابة الصحيحة من الأزرار الشفافة أدناه للحصول على النقاط!</i>"
+    )
+    
+    try:
+        sent_msg = bot.send_message(channel_input, q_msg_content, parse_mode="HTML", reply_markup=keyboard)
+        
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO questions (question_id, owner_id, question_text, opt_a, opt_b, opt_c, opt_d, correct_opt, channel_id, message_id, is_closed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                       (question_id, user_id, q_text, oa, ob, oc, od, correct_opt, str(sent_msg.chat.id), sent_msg.message_id))
+        conn.commit()
+        conn.close()
+        
+        bot.reply_to(message, "✅ **تم نشر السؤال التفاعلي بنجاح في القناة وتفعيل أزرار الإجابة!**", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"❌ **فشل نشر السؤال في القناة:**\n\n> تأكد أن البوت مشرف ولديه صلاحيات الإرسال.\n> التفاصيل: `{e}`", parse_mode="Markdown")
+
+# التعامل مع إجابات المستخدمين على الأسئلة التفاعلية (مع نظام سرعة الاستجابة ومنح نقاط مضاعفة لأول أسرع إجابة)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
+def handle_question_answer(call):
+    data_parts = call.data.split("_")
+    if len(data_parts) < 3:
+        return
+    
+    question_id = f"{data_parts[1]}_{data_parts[2]}"
+    chosen_opt = data_parts[3]
+    user = call.from_user
+    current_time = time.time()
+    
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT owner_id, correct_opt, is_closed FROM questions WHERE question_id = ?", (question_id,))
+    q_row = cursor.fetchone()
+    if not q_row:
+        bot.answer_callback_query(call.id, "❌ عذراً، هذا السؤال غير موجود أو انتهى.", show_alert=True)
+        conn.close()
+        return
+        
+    owner_id, correct_opt, is_closed = q_row
+    if is_closed == 1:
+        bot.answer_callback_query(call.id, "⌛ عذراً، تم إغلاق هذا السؤال!", show_alert=True)
+        conn.close()
+        return
+        
+    cursor.execute("SELECT * FROM question_answers WHERE question_id = ? AND user_id = ?", (question_id, user.id))
+    if cursor.fetchone():
+        bot.answer_callback_query(call.id, "⚠️ لقد قمت بالإجابة على هذا السؤال مسبقاً!", show_alert=True)
+        conn.close()
+        return
+        
+    is_correct = 1 if chosen_opt == correct_opt else 0
+    
+    # تطوير إضافي: نظام سرعة الاستجابة (نقاط مضاعفة لأول أسرع إجابة صحيحة)
+    cursor.execute("SELECT COUNT(*) FROM question_answers WHERE question_id = ? AND is_correct = 1", (question_id,))
+    correct_count_so_far = cursor.fetchone()[0]
+    
+    base_points = 10
+    earned_points = 0
+    speed_bonus_note = ""
+    
+    if is_correct == 1:
+        if correct_count_so_far == 0:
+            earned_points = base_points * 2  # نقاط مضاعفة للأول (سرعة الاستجابة)
+            speed_bonus_note = " 🚀 (مبروك! حصلت على نقاط مضاعفة لأنك أسرع إجابة!)"
+        else:
+            earned_points = base_points
+            
+        cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?", (user.id, earned_points, earned_points))
+        
+    cursor.execute("INSERT INTO question_answers (question_id, user_id, selected_option, is_correct, earned_points) VALUES (?, ?, ?, ?, ?)",
+                   (question_id, user.id, chosen_opt, is_correct, earned_points))
+    conn.commit()
+    conn.close()
+    
+    if is_correct == 1:
+        bot.answer_callback_query(call.id, f"✅ إجابة صحيحة! حصلت على {earned_points} نقطة.{speed_bonus_note}", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "❌ إجابة خاطئة! حظاً أوفر في المرات القادمة.", show_alert=True)
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_channel_username")
 def process_channel_posting(message):
