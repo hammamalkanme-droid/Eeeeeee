@@ -8,7 +8,7 @@ import io
 import csv
 import html
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request
 
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
@@ -54,6 +54,7 @@ def init_db():
                         user_id INTEGER, 
                         user_name TEXT, 
                         username TEXT, 
+                        vote_timestamp REAL DEFAULT 0,
                         PRIMARY KEY (poll_id, user_id)
                     )''')
     
@@ -1174,23 +1175,65 @@ def send_weekly_report_manual(call):
 def send_weekly_report_to_admin():
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
+    
+    now_ts = time.time()
+    week_ago_ts = now_ts - (7 * 24 * 60 * 60)
+    two_weeks_ago_ts = now_ts - (14 * 24 * 60 * 60)
+    
+    # 1. إجمالي الحضور خلال الأسبوع الحالي
+    cursor.execute("SELECT COUNT(*) FROM poll_votes WHERE vote_timestamp >= ?", (week_ago_ts,))
+    current_week_attendance = cursor.fetchone()[0] or 0
+    
+    # 2. إجمالي الحضور خلال الأسبوع السابق (لمقارنة نسبة النمو)
+    cursor.execute("SELECT COUNT(*) FROM poll_votes WHERE vote_timestamp >= ? AND vote_timestamp < ?", (two_weeks_ago_ts, week_ago_ts))
+    prev_week_attendance = cursor.fetchone()[0] or 0
+    
+    # حساب نسبة النمو مقارنة بالأسبوع السابق
+    if prev_week_attendance > 0:
+        growth_rate = round(((current_week_attendance - prev_week_attendance) / prev_week_attendance) * 100, 1)
+    else:
+        growth_rate = 100.0 if current_week_attendance > 0 else 0.0
+        
+    growth_sign = "+" if growth_rate >= 0 else ""
+    
+    # 3. تحديد أكثر الأيام تفاعلاً خلال الأسبوع
+    cursor.execute("""
+        SELECT date_str, SUM(count) as total_cnt 
+        FROM channel_daily_attendance 
+        GROUP BY date_str 
+        ORDER BY total_cnt DESC 
+        LIMIT 1
+    """)
+    top_day_row = cursor.fetchone()
+    if top_day_row and top_day_row[0]:
+        days_trans = {
+            'Saturday': 'السبت', 'Sunday': 'الأحد', 'Monday': 'الإثنين',
+            'Tuesday': 'الثلاثاء', 'Wednesday': 'الأربعاء', 'Thursday': 'الخميس', 'Friday': 'الجمعة'
+        }
+        try:
+            dt_obj = datetime.strptime(top_day_row[0], '%Y-%m-%d')
+            day_name_ar = days_trans.get(dt_obj.strftime('%A'), dt_obj.strftime('%A'))
+            top_day_str = f"{day_name_ar} ({top_day_row[0]}) - إجمالي التفاعلات: {top_day_row[1]}"
+        except Exception:
+            top_day_str = f"{top_day_row[0]} - التفاعلات: {top_day_row[1]}"
+    else:
+        top_day_str = "لا توجد بيانات كافية بعد"
+
     cursor.execute("SELECT COUNT(*) FROM user_profiles")
     total_users = cursor.fetchone()[0] or 0
     cursor.execute("SELECT COUNT(*) FROM polls")
     total_polls = cursor.fetchone()[0] or 0
-    cursor.execute("SELECT COUNT(*) FROM questions")
-    total_q = cursor.fetchone()[0] or 0
-    cursor.execute("SELECT SUM(count) FROM polls")
-    total_attendance = cursor.fetchone()[0] or 0
+    
     conn.close()
     
     report_text = (
         f"📊 <b>التقرير الأسبوعي الآلي لأداء البوت والقنوات:</b>\n\n"
-        f"<blockquote>• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code>\n"
-        f"• <b>إجمالي بوستات الحضور المنشورة:</b> <code>{total_polls}</code>\n"
-        f"• <b>إجمالي الأسئلة التفاعلية المطروحة:</b> <code>{total_q}</code>\n"
-        f"• <b>إجمالي عمليات الحضور المسجلة:</b> <code>{total_attendance}</code> تفاعل\n\n"
-        f"💡 <i>الوضع التشغيلي مستقر تماماً، وتعمل أنظمة الجدولة والأوسمة بكفاءة عالية.</i></blockquote>"
+        f"<blockquote>• <b>إجمالي الحضور هذا الأسبوع:</b> <code>{current_week_attendance}</code> تفاعل\n"
+        f"• <b>أكثر الأيام تفاعلاً:</b> <code>{top_day_str}</code>\n"
+        f"• <b>نسبة نمو التفاعل:</b> <code>{growth_sign}{growth_rate}%</code> مقارنة بالأسبوع السابق\n"
+        f"• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code> مستخدم\n"
+        f"• <b>إجمالي بوستات الحضور النشطة:</b> <code>{total_polls}</code> بوست</blockquote>\n\n"
+        f"💡 <i>يتم إرسال هذا التقرير التحليلي الآلي أسبوعياً لإعطاء نظرة شاملة لصناع المحتوى وأصحاب القنوات.</i>"
     )
     try:
         bot.send_message(ADMIN_ID, report_text, parse_mode="HTML")
@@ -1293,7 +1336,7 @@ def handle_channel_attendance(call):
 
     new_count = count + 1
     cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
-    cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username) VALUES (?, ?, ?, ?)", (poll_id, user.id, fixed_name, uname_str))
+    cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username, vote_timestamp) VALUES (?, ?, ?, ?, ?)", (poll_id, user.id, fixed_name, uname_str, current_time))
     cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, 5) ON CONFLICT(user_id) DO UPDATE SET points = points + 5", (user.id,))
     
     cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user.id,))
@@ -1346,9 +1389,17 @@ def handle_channel_attendance(call):
     bot.answer_callback_query(call.id, f"✨ تم تسجيل حضورك بنجاح يا {fixed_name} وحصلت على 5 نقاط!\n🏅 الوسام: {b_icon} {b_name}", show_alert=True)
 
 def background_scheduler_loop():
+    last_weekly_report_day = -1
     while True:
         try:
             current_t = time.time()
+            now_dt = datetime.now()
+            
+            # 1. إرسال التقرير الأسبوعي الآلي كل يوم جمعة في تمام الساعة 10:00 صباحاً (مثال) أو مرة كل 7 أيام
+            if now_dt.weekday() == 4 and now_dt.hour == 10 and now_dt.day != last_weekly_report_day:
+                send_weekly_report_to_admin()
+                last_weekly_report_day = now_dt.day
+
             conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
             cursor = conn.cursor()
             cursor.execute("SELECT sched_id, user_id, channel_id, title FROM scheduled_posts WHERE run_time <= ?", (current_t,))
@@ -1388,7 +1439,7 @@ def webhook_listener():
 
 @app.route("/")
 def index():
-    return "Bot is running perfectly with advanced analytics, badges, scheduling and speed races!", 200
+    return "Bot is running perfectly with advanced analytics, badges, scheduling, speed races and automated weekly reports!", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
