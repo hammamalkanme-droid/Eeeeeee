@@ -7,7 +7,7 @@ import time
 import io
 import csv
 from datetime import datetime
-from flask import Flask, request, send_file
+from flask import Flask, request
 
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
 WEBHOOK_URL = f"https://eeeeeee-production.up.railway.app/{TOKEN}"
@@ -19,7 +19,6 @@ app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    # جدول إعدادات المستخدم مع خيار عرض القناة (show_in_channel: 1 لعرضها، 0 للخاص فقط)
     cursor.execute('''CREATE TABLE IF NOT EXISTS user_settings (
                         user_id INTEGER PRIMARY KEY, 
                         title TEXT, 
@@ -28,7 +27,6 @@ def init_db():
                         show_in_channel INTEGER DEFAULT 1
                     )''')
     
-    # جدول البوستات النشطة مع إضافة حقول لتخزين تفاصيل الإعداد والتحديث المباشر
     cursor.execute('''CREATE TABLE IF NOT EXISTS polls (
                         poll_id TEXT PRIMARY KEY, 
                         owner_id INTEGER, 
@@ -36,8 +34,7 @@ def init_db():
                         title TEXT, 
                         end_time REAL DEFAULT 0, 
                         is_closed INTEGER DEFAULT 0,
-                        show_in_channel INTEGER DEFAULT 1,
-                        inline_message_id TEXT
+                        show_in_channel INTEGER DEFAULT 1
                     )''')
     
     cursor.execute('''CREATE TABLE IF NOT EXISTS poll_votes (
@@ -48,7 +45,6 @@ def init_db():
                         PRIMARY KEY (poll_id, user_id)
                     )''')
     
-    # جدول أسماء المستخدمين المرتبطة بالـ ID لضمان ثبات اسم العضو حتى لو غيره
     cursor.execute('''CREATE TABLE IF NOT EXISTS user_profiles (
                         user_id INTEGER PRIMARY KEY,
                         full_name TEXT,
@@ -79,7 +75,6 @@ def get_arabic_date_string():
     m_name = months.get(str(now.month), '')
     return f"{d_name} {now.day} {m_name} {now.year}"
 
-# دالة مساعدة لإنشاء أزرار ملونة احترافية
 def create_colored_btn(text, callback_data=None, switch_query=None, style="primary"):
     if switch_query:
         btn = types.InlineKeyboardButton(text=text, switch_inline_query=switch_query)
@@ -112,7 +107,6 @@ def get_main_inline_keyboard(user_id):
 def send_welcome(message):
     user_id = message.from_user.id
     
-    # تحديث وتخزين البروفایل الثابت للمستخدم برابط الـ ID
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     uname_str = f"@{message.from_user.username}" if message.from_user.username else "لا يوجد"
@@ -145,6 +139,7 @@ def send_welcome(message):
     welcome_text = (
         f"✨ **مرحباً بك عزيزي {message.from_user.first_name}**\n\n"
         f"> 📌 *أنشئ بوستات الحضور بكل احترافية، تحكم بوقت الإغلاق، وتتبع تفاعلات ونشاط أعضائك.*\n\n"
+        f"⚠️ **تنبيه هام جداً:** لكي يتمكن البوت من **تحديث المنشور تلقائياً** في القناة أو المجموعة، يجب أن ترفع البوت **مشرفاً (Admin)** مع صلاحية تعديل رسائل الآخرين!\n\n"
         f"🔗 **رابط دعوتك الشخصي:**\n`https://t.me/{bot.get_me().username}?start={user_id}`\n\n"
         f"📊 **إجمالي زوار رابطك:** `{total_visits}` شخص\n"
         f"🌟 **رصيدك من النقاط:** `{user_points}` نقطة\n\n"
@@ -169,39 +164,25 @@ def handle_menu_callbacks(call):
         bot.answer_callback_query(call.id)
         inline_markup = types.InlineKeyboardMarkup()
         inline_markup.add(create_colored_btn("🚀 انشر البوست الآن في قناة/مجموعة", switch_query="create", style="success"))
-        bot.send_message(call.message.chat.id, "📌 *اضغط على الزر أدناه لبدء نشر بوست الحضور الجديد وفق خياراتك الإعدادية:*", parse_mode="Markdown", reply_markup=inline_markup)
+        bot.send_message(call.message.chat.id, "📌 *اضغط على الزر أدناه لبدء نشر بوست الحضور الجديد وفق خياراتك الإعدادية:*\n\n> ⚠️ *تأكد أن البوت مشرف بالقناة ليعمل التحديث الفوري.*", parse_mode="Markdown", reply_markup=inline_markup)
     
     elif action == "stats":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute("SELECT poll_id, title, count FROM polls WHERE owner_id = ?", (user_id,))
+        cursor.execute("SELECT poll_id, title, count FROM polls WHERE owner_id = ? ORDER BY rowid DESC", (user_id,))
         user_polls = cursor.fetchall()
-        cursor.execute("SELECT COUNT(*), SUM(count) FROM polls WHERE owner_id = ?", (user_id,))
-        polls_count, total_votes = cursor.fetchone()
-        cursor.execute("SELECT visits_count FROM referrals WHERE owner_id = ?", (user_id,))
-        ref_res = cursor.fetchone()
-        total_visits = ref_res[0] if ref_res else 0
         conn.close()
         
-        polls_count = polls_count if polls_count else 0
-        total_votes = total_votes if total_votes else 0
-        
-        stats_text = (
-            f"📊 **إحصائيات حسابك الشاملة:**\n\n"
-            f"> • **عدد البوستات المنشأة:** `{polls_count}`\n"
-            f"> • **إجمالي الحضور المسجلين:** `{total_votes}`\n"
-            f"> • **زوار رابط الدعوة الخاص بك:** `{total_visits}`\n\n"
-            f"📥 **تحميل كشوفات الحضور (Excel / CSV):**"
-        )
-        
+        if not user_polls:
+            bot.send_message(call.message.chat.id, "📊 **إحصائيات الحضور:**\n\n> ⚠️ *لا توجد بوستات منشأة حتى الآن.*", parse_mode="Markdown")
+            return
+            
+        stats_text = "📊 **سجل إحصائيات حضور بوستاتك:**\n\n> *اختر البوست من الأزرار أدناه لعرض التفاصيل ونسبة الحضور مباشرة:*"
         markup = types.InlineKeyboardMarkup(row_width=1)
-        if user_polls:
-            for pid, title, cnt in user_polls:
-                short_title = title[:20] + "..." if len(title) > 20 else title
-                markup.add(create_colored_btn(f"📄 تحميل كشف: {short_title} ({cnt})", callback_data=f"export_{pid}", style="success"))
-        else:
-            markup.add(create_colored_btn("⚠️ لا توجد بوستات نشطة حالياً", callback_data="none", style="danger"))
+        for pid, title, cnt in user_polls:
+            short_title = title[:25] + "..." if len(title) > 25 else title
+            markup.add(create_colored_btn(f"📌 {short_title} (حاضر: {cnt})", callback_data=f"view_stats_{pid}", style="success"))
             
         bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown", reply_markup=markup)
     
@@ -280,7 +261,61 @@ def handle_menu_callbacks(call):
         )
         bot.send_message(call.message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
 
-# خطوات إنشاء البوست وتسميته (يدوي أو باليوم والتاريخ)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("view_stats_"))
+def view_poll_detailed_stats(call):
+    poll_id = call.data.replace("view_stats_", "")
+    user_id = call.from_user.id
+    
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT title, count, end_time FROM polls WHERE poll_id = ? AND owner_id = ?", (poll_id, user_id))
+    poll = cursor.fetchone()
+    if not poll:
+        bot.answer_callback_query(call.id, "❌ البوست غير موجود أو ليس لك صلاحية.", show_alert=True)
+        conn.close()
+        return
+        
+    title, count, end_time = poll
+    cursor.execute("SELECT user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,))
+    votes = cursor.fetchall()
+    
+    # ميزة إضافية ذكية: حساب إجمالي الأعضاء المسجلين بالبوت أو نسبة تقريبية للنشاط
+    cursor.execute("SELECT COUNT(*) FROM user_profiles")
+    total_bot_users = cursor.fetchone()[0] or 1
+    conn.close()
+    
+    attendance_rate = round((count / total_bot_users) * 100, 1)
+    if attendance_rate > 100: attendance_rate = 100
+    
+    voters_str = ""
+    if votes:
+        voters_lines = [f"> {i+1}. **{v[0]}** ({v[1]})" for i, v in enumerate(votes)]
+        voters_str = "\n".join(voters_lines)
+    else:
+        voters_str = "> *لم يسجل أحد حضوره حتى الآن.*"
+        
+    stats_detail_msg = (
+        f"📋 **تفاصيل إحصائيات الحضور:**\n\n"
+        f"> • **عنوان البوست:** `{title}`\n"
+        f"> • **إعدد الحاضرين:** `{count}` عضو\n"
+        f"> • **نسبة الحضور التقريبية:** `{attendance_rate}%`\n\n"
+        f"👥 **قائمة الحاضرين بأسمائهم:**\n"
+        f"{voters_str}"
+    )
+    
+    markup = types.InlineKeyboardMarkup()
+    markup.add(create_colored_btn("📥 تحميل ملف CSV (اختياري)", callback_data=f"export_{poll_id}", style="primary"))
+    markup.add(create_colored_btn("🔙 العودة لقائمة البوستات", callback_data="menu_stats", style="success"))
+    
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=stats_detail_msg,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
 @bot.callback_query_handler(func=lambda call: call.data == "wizard_title_type")
 def wizard_title_type(call):
     bot.answer_callback_query(call.id)
@@ -309,7 +344,6 @@ def wizard_title_auto(call):
     conn.close()
     
     bot.answer_callback_query(call.id, "✅ تم اعتماد اسم التاريخ تلقائياً!")
-    # الانتقال لخطوة اختيار الوقت
     ask_duration_wizard(call.message)
 
 def ask_duration_wizard(message):
@@ -343,7 +377,6 @@ def handle_wizard_duration(call):
     
     bot.answer_callback_query(call.id, "✅ تم حفظ الوقت بنجاح!")
     
-    # الخطوة التالية: اختيار عرض القائمة بالعضو أو خاص
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         create_colored_btn("📺 عرض القائمة بالقناة (تتحدث تلقائياً مع طي الأسماء)", callback_data="w_show_1", style="success"),
@@ -365,7 +398,7 @@ def handle_wizard_show_mode(call):
     
     markup = types.InlineKeyboardMarkup()
     markup.add(create_colored_btn("🚀 انشر البوست الآن في قناتك", switch_query="create", style="success"))
-    bot.send_message(call.message.chat.id, "🎉 **أصبح بوست الحضور جاهزاً تماماً للنشر!**\n\n> *اضغط على الزر أدناه لاختيار القناة أو المجموعة ونشر البوست:*", parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "🎉 **أصبح بوست الحضور جاهزاً تماماً للنشر!**\n\n> ⚠️ *تذكير مهم: تأكد أن البوت مرفوع [مشرف (Admin)] في القناة لكي يتم التعديل الفوري للرسالة.*\n\n👇 *اضغط الزر أدناه للنشر:*", parse_mode="Markdown", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_manual_title")
 def save_manual_title(message):
@@ -497,7 +530,6 @@ def send_admin_reply_to_user(message):
     except Exception:
         bot.reply_to(message, "❌ فشل إرسال الرد.")
 
-# معالجة استعلام النشر عبر الـ Inline Query
 @bot.inline_handler(func=lambda query: True)
 def inline_query(query):
     user_id = query.from_user.id
@@ -545,7 +577,6 @@ def inline_query(query):
     ]
     bot.answer_inline_query(query.id, articles, cache_time=1)
 
-# تسجيل الحضور وضمان استخدام الاسم الثابت المرتبط بالـ ID
 @bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
 def handle_channel_attendance(call):
     poll_id = call.data.replace("attend_", "")
@@ -555,7 +586,6 @@ def handle_channel_attendance(call):
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
-    # تحديث وتثبيت اسم العضو المرتبط بالـ ID بناءً على سجله في البوت
     uname_str = f"@{user.username}" if user.username else "لا يوجد"
     cursor.execute("SELECT full_name FROM user_profiles WHERE user_id = ?", (user.id,))
     prof = cursor.fetchone()
@@ -590,17 +620,14 @@ def handle_channel_attendance(call):
     cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
     cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username) VALUES (?, ?, ?, ?)", (poll_id, user.id, fixed_name, uname_str))
     
-    # منح نقاط تفاعلية للمستخدم
     cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, 5) ON CONFLICT(user_id) DO UPDATE SET points = points + 5", (user.id,))
     
-    # جلب جميع الأعضاء المسجلين في هذا البوست لتحديث القائمة بتنسيق القائمة المنسدلة (الطي)
     cursor.execute("SELECT user_name FROM poll_votes WHERE poll_id = ?", (poll_id,))
     all_voters = cursor.fetchall()
     
     conn.commit()
     conn.close()
     
-    # إشعار المنشئ دائماً على الخاص مع اسم العضو الثابت المرتبط بالـ ID
     owner_notification = (
         f"🔔 **تسجيل حضور جديد في بوستك!**\n\n"
         f"> • **البوست:** {title}\n"
@@ -613,13 +640,10 @@ def handle_channel_attendance(call):
     except Exception:
         pass 
         
-    # تحديث رسالة القناة تلقائياً لو كان الخيار مفعلاً بعرض القائمة داخل اقتباس (طي)
     try:
-        duration_note = "" # ملاحظة الوقت يمكن إضافتها عند الحاجة
         new_keyboard = types.InlineKeyboardMarkup()
         new_keyboard.add(create_colored_btn(f"✅ تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}", style="success"))
         
-        # بناء قائمة الاقتباس للأسماء
         voters_list_str = ""
         if show_in_channel == 1:
             voters_lines = [f"> {i+1}. {v[0]}" for i, v in enumerate(all_voters)]
@@ -636,8 +660,9 @@ def handle_channel_attendance(call):
             parse_mode="Markdown",
             reply_markup=new_keyboard
         )
-    except Exception:
-        pass
+    except Exception as e:
+        # طباعة الخطأ أو تجاهله في حال لم يكن البوت مشرفاً أو رُفعت الرسالة بشكل خاطئ
+        print(f"Error editing message: {e}")
         
     bot.answer_callback_query(call.id, f"✨ تم تسجيل حضورك بنجاح يا {fixed_name} وحصلت على 5 نقاط!", show_alert=True)
 
