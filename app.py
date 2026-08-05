@@ -48,6 +48,25 @@ def init_db():
                         PRIMARY KEY (poll_id, user_id)
                     )''')
     
+    cursor.execute('''CREATE TABLE IF NOT EXISTS channel_daily_attendance (
+                        user_id INTEGER,
+                        channel_id TEXT,
+                        date_str TEXT,
+                        count INTEGER DEFAULT 0,
+                        PRIMARY KEY (user_id, channel_id, date_str)
+                    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS saved_channels (
+                        user_id INTEGER,
+                        channel_id TEXT,
+                        channel_title TEXT,
+                        PRIMARY KEY (user_id, channel_id)
+                    )''')
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS authorized_question_creators (
+                        user_id INTEGER PRIMARY KEY
+                    )''')
+    
     cursor.execute('''CREATE TABLE IF NOT EXISTS user_profiles (
                         user_id INTEGER PRIMARY KEY,
                         full_name TEXT,
@@ -230,28 +249,15 @@ def show_profile_data(chat_id, user_id):
     correct_q = q_res[1] if q_res and q_res[1] else 0
     accuracy = round((correct_q / total_q) * 100, 1) if total_q > 0 else 0.0
     
-    # جلب أسماء القنوات الحقيقية عبر تيليجرام
-    cursor.execute("SELECT DISTINCT channel_id FROM polls WHERE owner_id = ?", (user_id,))
-    poll_channels = [row[0] for row in cursor.fetchall()]
-    cursor.execute("SELECT DISTINCT channel_id FROM questions WHERE owner_id = ?", (user_id,))
-    q_channels = [row[0] for row in cursor.fetchall()]
+    cursor.execute("SELECT DISTINCT channel_title, channel_id FROM saved_channels WHERE user_id = ?", (user_id,))
+    saved_channels = cursor.fetchall()
     
-    all_channel_ids = list(set(poll_channels + q_channels))
-    channel_names = []
-    for cid in all_channel_ids:
-        try:
-            chat_info = bot.get_chat(cid)
-            channel_names.append(chat_info.title or str(cid))
-        except Exception:
-            channel_names.append(str(cid))
-            
     cursor.execute("SELECT code FROM coupon_uses WHERE user_id = ?", (user_id,))
     used_coupons = [row[0] for row in cursor.fetchall()]
-    
     conn.close()
     
     coupons_str = ", ".join(used_coupons) if used_coupons else "لا توجد"
-    channels_str = ", ".join(channel_names) if channel_names else "لا توجد قنوات مسجلة"
+    channels_str = ", ".join([f"{c[0]} ({c[1]})" for c in saved_channels]) if saved_channels else "لا توجد قنوات مسجلة"
     
     profile_text = (
         f"👤 <b>لوحة الملف الشخصي الإحصائي الشامل:</b>\n\n"
@@ -269,137 +275,15 @@ def show_profile_data(chat_id, user_id):
     )
     bot.send_message(chat_id, profile_text, parse_mode="HTML")
 
-@bot.message_handler(commands=['createcode'])
-def cmd_create_code(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
-        return
-    
-    args = message.text.split()
-    if len(args) < 4:
-        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n<code>/createcode [الكود] [النقاط] [عدد_المرات]</code>\nمثال: <code>/createcode WELCOME 50 20</code>", parse_mode="HTML")
-        return
-    
-    code = args[1].strip()
-    try:
-        points = int(args[2])
-        max_uses = int(args[3])
-    except ValueError:
-        bot.reply_to(message, "❌ النقاط وعدد مرات الاستخدام يجب أن تكون أرقاماً صحيحة.")
-        return
-    
-    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO coupons (code, points, max_uses, uses_count, expires_at, is_closed) VALUES (?, ?, ?, 0, 0, 0)", 
-                       (code, points, max_uses))
-        conn.commit()
-        bot.reply_to(message, f"✅ <b>تم إنشاء الكوبون بنجاح!</b>\n\n<blockquote>• الكود: <code>{code}</code>\n• النقاط الممنوحة: <code>{points}</code>\n• عدد مرات الاستخدام المتاحة: <code>{max_uses}</code></blockquote>", parse_mode="HTML")
-    except sqlite3.IntegrityError:
-        bot.reply_to(message, "❌ هذا الكود موجود مسبقاً، اختر كوداً آخر.")
-    finally:
-        conn.close()
-
-@bot.message_handler(commands=['closecode'])
-def cmd_close_code(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
-        return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n<code>/closecode [الكود]</code>", parse_mode="HTML")
-        return
-    
-    code = args[1].strip()
-    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE coupons SET is_closed = 1 WHERE code = ?", (code,))
-    if cursor.rowcount > 0:
-        conn.commit()
-        bot.reply_to(message, f"🔒 <b>تم إغلاق الكود <code>{code}</code> يدوياً بنجاح.</b>", parse_mode="HTML")
-    else:
-        bot.reply_to(message, "❌ هذا الكود غير موجود.")
-    conn.close()
-
-@bot.message_handler(commands=['redeem', 'شحن'])
-def cmd_redeem(message):
-    args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ الاستخدام الصحيح:\n<code>/redeem [الكود]</code>\nأو أرسل الكود مباشرة.", parse_mode="HTML")
-        return
-    code = args[1].strip()
-    process_coupon_redemption(message, code)
-
-def process_coupon_redemption(message, code):
-    user_id = message.from_user.id
-    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT points, max_uses, uses_count, is_closed FROM coupons WHERE code = ?", (code,))
-    coupon = cursor.fetchone()
-    
-    if not coupon:
-        bot.reply_to(message, "❌ الكود المدخل غير صحيح أو غير موجود.")
-        conn.close()
-        return
-        
-    points, max_uses, uses_count, is_closed = coupon
-    
-    if is_closed == 1 or uses_count >= max_uses:
-        bot.reply_to(message, "⌛ عذراً، هذا الكود منتهي الصلاحية أو استنفد عدد مرات الاستخدام المسموحة.")
-        conn.close()
-        return
-        
-    cursor.execute("SELECT * FROM coupon_uses WHERE code = ? AND user_id = ?", (code, user_id))
-    if cursor.fetchone():
-        bot.reply_to(message, "⚠️ لقد قمت باستخدام هذا الكود مسبقاً ولا يمكنك استخدامه مرتين!")
-        conn.close()
-        return
-        
-    cursor.execute("INSERT INTO coupon_uses (code, user_id) VALUES (?, ?)", (code, user_id))
-    cursor.execute("UPDATE coupons SET uses_count = uses_count + 1 WHERE code = ?", (code,))
-    cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?", (user_id, points, points))
-    conn.commit()
-    conn.close()
-    
-    bot.reply_to(message, f"🎉 <b>مبروك! تم شحن الكود بنجاح.</b>\n\n<blockquote>• حصلت على: <b>{points} نقطة</b> رصيد جديد.</blockquote>", parse_mode="HTML")
-
-@bot.message_handler(commands=['backup'])
-def backup_database(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
-        return
-    
-    db_file = 'roulette_bot.db'
-    if os.path.exists(db_file):
-        with open(db_file, 'rb') as f:
-            bot.send_document(message.chat.id, f, caption="📂 هذه أحدث نسخة احتياطية لقاعدة البيانات الخاصة بك.")
-    else:
-        bot.reply_to(message, "⚠️ ملف قاعدة البيانات غير موجود حالياً.")
-
-@bot.message_handler(content_types=['document'])
-def restore_database(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    if message.document.file_name == 'roulette_bot.db':
-        try:
-            file_info = bot.get_file(message.document.file_id)
-            downloaded_file = bot.download_file(file_info.file_path)
-            
-            with open('roulette_bot.db', 'wb') as new_file:
-                new_file.write(downloaded_file)
-                
-            bot.reply_to(message, "✅ تم استرجاع وتحديث قاعدة البيانات بنجاح تام! البوت يعمل الآن بالبيانات الجديدة.")
-        except Exception as e:
-            bot.reply_to(message, f"❌ حدث خطأ أثناء الاسترجاع: {e}")
-
 @bot.message_handler(commands=['admin'])
 def cmd_admin(message):
     user_id = message.from_user.id
     if user_id != ADMIN_ID:
         bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
         return
+    show_admin_panel(message.chat.id)
+
+def show_admin_panel(chat_id):
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM user_settings")
@@ -412,6 +296,7 @@ def cmd_admin(message):
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
+    markup.add(create_colored_btn("👥 إدارة مصممي الأسئلة", callback_data="admin_manage_q_creators", style="primary"))
     
     admin_panel = (
         f"👑 <b>لوحة تحكم المشرف العامة:</b>\n\n"
@@ -420,7 +305,80 @@ def cmd_admin(message):
         f"• <b>إجمالي الكوبونات النشطة:</b> <code>{total_coupons}</code>\n"
         f"• <b>حالة السيرفر:</b> يعمل بكفاءة عالية 🟢</blockquote>"
     )
-    bot.send_message(message.chat.id, admin_panel, parse_mode="HTML", reply_markup=markup)
+    bot.send_message(chat_id, admin_panel, parse_mode="HTML", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_manage_q_creators")
+def admin_manage_q_creators(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
+        return
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM authorized_question_creators")
+    creators = cursor.fetchall()
+    conn.close()
+    
+    creators_list = "\n".join([f"• <code>{c[0]}</code>" for c in creators]) if creators else "• لا يوجد مصممون مضافون حالياً."
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        create_colored_btn("➕ إضافة مصمم", callback_data="admin_add_q_creator", style="success"),
+        create_colored_btn("➖ حذف مصمم", callback_data="admin_remove_q_creator", style="danger")
+    )
+    markup.add(create_colored_btn("🔙 رجوع لوحة التحكم", callback_data="menu_admin", style="primary"))
+    
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=f"👥 <b>إدارة المستخدمين المصرح لهم بطرح الأسئلة:</b>\n\n{creators_list}",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_add_q_creator")
+def admin_add_q_creator_prompt(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    user_states[ADMIN_ID] = "waiting_q_creator_add_id"
+    bot.answer_callback_query(call.id)
+    bot.send_message(ADMIN_ID, "➕ <i>أرسل الآن (أيدي Telegram) المستخدم الذي تريد السماح له بطرح الأسئلة:</i>", parse_mode="HTML")
+
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_q_creator_add_id")
+def admin_save_q_creator(message):
+    user_states.pop(ADMIN_ID, None)
+    try:
+        target_id = int(message.text.strip())
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO authorized_question_creators (user_id) VALUES (?)", (target_id,))
+        conn.commit()
+        conn.close()
+        bot.reply_to(message, f"✅ <b>تمت إضافة المستخدم <code>{target_id}</code> لقائمة مصممي الأسئلة بنجاح!</b>", parse_mode="HTML")
+    except ValueError:
+        bot.reply_to(message, "❌ الأيدي غير صحيح، يجب أن يكون رقماً.")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_remove_q_creator")
+def admin_remove_q_creator_prompt(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+    user_states[ADMIN_ID] = "waiting_q_creator_remove_id"
+    bot.answer_callback_query(call.id)
+    bot.send_message(ADMIN_ID, "➖ <i>أرسل الآن (أيدي Telegram) المستخدم المراد إزالته من الصلاحية:</i>", parse_mode="HTML")
+
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_q_creator_remove_id")
+def admin_delete_q_creator(message):
+    user_states.pop(ADMIN_ID, None)
+    try:
+        target_id = int(message.text.strip())
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM authorized_question_creators WHERE user_id = ?", (target_id,))
+        conn.commit()
+        conn.close()
+        bot.reply_to(message, f"✅ <b>تمت إزالة المستخدم <code>{target_id}</code> من القائمة بنجاح.</b>", parse_mode="HTML")
+    except ValueError:
+        bot.reply_to(message, "❌ الأيدي غير صحيح.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_callbacks(call):
@@ -437,16 +395,40 @@ def handle_menu_callbacks(call):
     
     elif action == "share":
         bot.answer_callback_query(call.id)
-        user_states[user_id] = "waiting_channel_username"
-        bot.send_message(
-            call.message.chat.id, 
-            "🚀 <b>نشر بوست الحضور مباشرة بواسطة البوت:</b>\n\n"
-            "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.</blockquote>", 
-            parse_mode="HTML"
-        )
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_title, channel_id FROM saved_channels WHERE user_id = ?", (user_id,))
+        saved = cursor.fetchall()
+        conn.close()
+        
+        if saved:
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            for c_title, c_id in saved:
+                markup.add(create_colored_btn(f"📢 {c_title}", callback_data=f"select_chan_{c_id}", style="success"))
+            markup.add(create_colored_btn("➕ إضافة قناة جديدة", callback_data="add_new_channel_prompt", style="primary"))
+            bot.send_message(call.message.chat.id, "🚀 <b>اختر إحدى قنواتك المحفوظة أو أضف قناة جديدة للنشر:</b>", parse_mode="HTML", reply_markup=markup)
+        else:
+            user_states[user_id] = "waiting_channel_username"
+            bot.send_message(
+                call.message.chat.id, 
+                "🚀 <b>نشر بوست الحضور مباشرة بواسطة البوت:</b>\n\n"
+                "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.</blockquote>", 
+                parse_mode="HTML"
+            )
     
     elif action == "create_question":
         bot.answer_callback_query(call.id)
+        # التحقق هل المستخدم هو المطور أو مضاف لقائمة مصممي الأسئلة
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM authorized_question_creators WHERE user_id = ?", (user_id,))
+        is_authorized = cursor.fetchone() or (user_id == ADMIN_ID)
+        conn.close()
+        
+        if not is_authorized:
+            bot.send_message(call.message.chat.id, "⛔ عذراً، ميزة طرح الأسئلة التفاعلية مخصصة للمطور والمصرح لهم فقط.", parse_mode="HTML")
+            return
+            
         user_states[user_id] = "waiting_q_text"
         bot.send_message(
             call.message.chat.id,
@@ -489,7 +471,6 @@ def handle_menu_callbacks(call):
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
         cursor = conn.cursor()
         
-        # جلب أكثر المستخدمين جلباً للزوار مع أسمائهم الحقيقية
         cursor.execute("""
             SELECT r.owner_id, r.visits_count, p.full_name, p.username 
             FROM referrals r 
@@ -498,7 +479,6 @@ def handle_menu_callbacks(call):
         """)
         top_users = cursor.fetchall()
         
-        # جلب أكثر الأعضاء تفاعلاً ونقاطاً مع أسمائهم الحقيقية
         cursor.execute("""
             SELECT tp.user_id, tp.points, p.full_name, p.username 
             FROM user_points tp 
@@ -558,24 +538,21 @@ def handle_menu_callbacks(call):
             bot.answer_callback_query(call.id, "هذا الزر للمشرف فقط ⛔", show_alert=True)
             return
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM user_settings")
-        total_users = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM polls")
-        total_polls = cursor.fetchone()[0]
-        conn.close()
-        
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
-        
-        admin_panel = (
-            f"👑 <b>لوحة تحكم المشرف العامة:</b>\n\n"
-            f"<blockquote>• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code>\n"
-            f"• <b>إجمالي بوستات الحضور:</b> <code>{total_polls}</code>\n"
-            f"• <b>حالة السيرفر:</b> يعمل بكفاءة عالية 🟢</blockquote>"
-        )
-        bot.send_message(call.message.chat.id, admin_panel, parse_mode="HTML", reply_markup=markup)
+        show_admin_panel(call.message.chat.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_new_channel_prompt")
+def add_new_channel_prompt(call):
+    user_id = call.from_user.id
+    user_states[user_id] = "waiting_channel_username"
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "🚀 <b>أرسل الآن معرف القناة الجديدة أو الرابط أو الأيدي:</b>", parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("select_chan_"))
+def select_saved_channel(call):
+    user_id = call.from_user.id
+    channel_id = call.data.replace("select_chan_", "")
+    bot.answer_callback_query(call.id)
+    publish_poll_to_channel(call.message, user_id, channel_id)
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_coupon_input")
 def process_coupon_text_input(message):
@@ -688,8 +665,7 @@ def q_step_publish(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
 def handle_question_answer(call):
-    # استخراج question_id واختيار الإجابة بدقة تامة بغض النظر عن عدد الشرطات السفلية
-    raw_data = call.data[4:] # إزالة "ans_"
+    raw_data = call.data[4:]
     last_underscore_idx = raw_data.rfind('_')
     if last_underscore_idx == -1:
         return
@@ -753,6 +729,10 @@ def process_channel_posting(message):
     user_id = message.from_user.id
     channel_input = message.text.strip()
     user_states.pop(user_id, None)
+    publish_poll_to_channel(message, user_id, channel_input)
+
+def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
+    chat_id_to_send = message_or_call_msg.chat.id if hasattr(message_or_call_msg, 'chat') else message_or_call_msg.message.chat.id
     
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -779,15 +759,25 @@ def process_channel_posting(message):
     try:
         sent_msg = bot.send_message(channel_input, msg_content, parse_mode="HTML", reply_markup=keyboard)
         
+        # حفظ القناة في القنوات المحفوظة للمستخدم
+        try:
+            chat_info = bot.get_chat(sent_msg.chat.id)
+            c_title = chat_info.title or str(sent_msg.chat.id)
+        except Exception:
+            c_title = str(sent_msg.chat.id)
+            
+        cursor.execute("INSERT OR REPLACE INTO saved_channels (user_id, channel_id, channel_title) VALUES (?, ?, ?)", 
+                       (user_id, str(sent_msg.chat.id), c_title))
+
         cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
                        (poll_id, user_id, 0, title, end_time, 0, show_in_channel, str(sent_msg.chat.id), sent_msg.message_id))
         conn.commit()
         conn.close()
         
-        bot.reply_to(message, "✅ <b>تم نشر بوست الحضور بنجاح في القناة!</b>\n\n<blockquote>🔄 البوت الآن يمتلك الصلاحية الكاملة لتعديل الرسالة وتحديث الحاضرين فورياً.</blockquote>", parse_mode="HTML")
+        bot.send_message(chat_id_to_send, "✅ <b>تم نشر بوست الحضور بنجاح في القناة وحفظها بقنواتك!</b>", parse_mode="HTML")
     except Exception as e:
         conn.close()
-        bot.reply_to(message, f"❌ <b>فشل النشر في القناة:</b>\n\n<blockquote>تأكد أن البوت <b>مشرف</b> في القناة ولديه صلاحية إرسال الرسائل، وأن المعرف صحيح (مثال: <code>@MyChannel</code>).\nالتفاصيل التقنية: <code>{e}</code></blockquote>", parse_mode="HTML")
+        bot.send_message(chat_id_to_send, f"❌ <b>فشل النشر في القناة:</b>\n\n<blockquote>تأكد أن البوت <b>مشرف</b> في القناة ولديه صلاحية إرسال الرسائل.\nالتفاصيل التقنية: <code>{e}</code></blockquote>", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("view_stats_"))
 def view_poll_detailed_stats(call):
@@ -1096,6 +1086,7 @@ def handle_channel_attendance(call):
     poll_id = call.data.replace("attend_", "")
     user = call.from_user
     current_time = time.time()
+    today_str = datetime.now().strftime('%Y-%m-%d')
     
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -1126,10 +1117,23 @@ def handle_channel_attendance(call):
         
     cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
     if cursor.fetchone():
-        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً!", show_alert=True)
+        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً في هذا البوست!", show_alert=True)
+        conn.close()
+        return
+
+    # التحقق من الحد الأقصى لتسجيل الحضور في نفس القناة يومياً (مرتان كحد أقصى)
+    cursor.execute("SELECT count FROM channel_daily_attendance WHERE user_id = ? AND channel_id = ? AND date_str = ?", (user.id, channel_id, today_str))
+    att_row = cursor.fetchone()
+    att_count = att_row[0] if att_row else 0
+    if att_count >= 2:
+        bot.answer_callback_query(call.id, "⚠️ لقد وصلت للحد الأقصى لتسجيل الحضور في هذه القناة اليوم (مرتان فقط يومياً).", show_alert=True)
         conn.close()
         return
         
+    # تحديث عداد الحضور اليومي للقناة
+    cursor.execute("INSERT INTO channel_daily_attendance (user_id, channel_id, date_str, count) VALUES (?, ?, ?, 1) ON CONFLICT(user_id, channel_id, date_str) DO UPDATE SET count = count + 1", 
+                   (user.id, channel_id, today_str))
+
     new_count = count + 1
     cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
     cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username) VALUES (?, ?, ?, ?)", (poll_id, user.id, fixed_name, uname_str))
