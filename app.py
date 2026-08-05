@@ -715,7 +715,7 @@ def send_admin_reply_to_user(message):
     except Exception as e:
         bot.reply_to(message, f"❌ <b>فشل إرسال الرد للمستخدم:</b>\n<code>{e}</code>\n\n<i>قد يكون المستخدم قد حظر البوت.</i>", parse_mode="HTML")
 
-            return
+     return
         bot.answer_callback_query(call.id)
   
     show_admin_panel(call.message.chat.id)
