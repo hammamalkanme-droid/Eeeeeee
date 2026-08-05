@@ -161,6 +161,35 @@ def cmd_points(message):
     conn.close()
     bot.reply_to(message, f"🌟 **رصيدك الحالي:** `{pts}` نقطة.", parse_mode="Markdown")
 
+@bot.message_handler(commands=['backup'])
+def backup_database(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ هذا الأمر مخصص للمشرف فقط.")
+        return
+    
+    db_file = 'roulette_bot.db'
+    if os.path.exists(db_file):
+        with open(db_file, 'rb') as f:
+            bot.send_document(message.chat.id, f, caption="📂 هذه أحدث نسخة احتياطية لقاعدة البيانات الخاصة بك.")
+    else:
+        bot.reply_to(message, "⚠️ ملف قاعدة البيانات غير موجود حالياً.")
+
+@bot.message_handler(content_types=['document'])
+def restore_database(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.document.file_name == 'roulette_bot.db':
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            
+            with open('roulette_bot.db', 'wb') as new_file:
+                new_file.write(downloaded_file)
+                
+            bot.reply_to(message, "✅ تم استرجاع وتحديث قاعدة البيانات بنجاح تام! البوت يعمل الآن بالبيانات الجديدة.")
+        except Exception as e:
+            bot.reply_to(message, f"❌ حدث خطأ أثناء الاسترجاع: {e}")
+
 @bot.message_handler(commands=['admin'])
 def cmd_admin(message):
     user_id = message.from_user.id
