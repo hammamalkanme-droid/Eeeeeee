@@ -85,7 +85,6 @@ def init_db():
                         user_id INTEGER PRIMARY KEY
                     )""")
 
-  # تم تحديث جدول الملفات الشخصية ليشمل وقت الانضمام للإحصائيات الدقيقة
   cursor.execute("""CREATE TABLE IF NOT EXISTS user_profiles (
                         user_id INTEGER PRIMARY KEY,
                         full_name TEXT,
@@ -93,7 +92,6 @@ def init_db():
                         joined_timestamp REAL DEFAULT 0
                     )""")
 
-  # جدول التفاعلات الجديد لإحصائيات النشاط
   cursor.execute("""CREATE TABLE IF NOT EXISTS interactions (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
@@ -188,7 +186,6 @@ init_db()
 user_states = {}
 
 
-# دالة تسجيل المستخدم التفاعلي وتتبع دخوله لأول مرة
 def log_user_interaction(user_id, username, first_name):
   conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
   cursor = conn.cursor()
@@ -390,10 +387,8 @@ def send_welcome(message):
   username = message.from_user.username or "لا يوجد"
   first_name = message.from_user.first_name
 
-  # تسجيل التفاعل ومعرفة إن كان المستخدم جديداً
   is_new = log_user_interaction(user_id, username, first_name)
 
-  # إرسال تنبيه فوري للمطور إذا كان المستخدم جديداً
   if is_new and user_id != ADMIN_ID:
     admin_alert = (
         f"🚨 <b>مستخدم جديد فتح البوت!</b>\n\n👤 <b>الاسم:</b>"
@@ -457,7 +452,7 @@ def send_welcome(message):
 
   markup = get_main_inline_keyboard(user_id)
   welcome_text = (
-      f"✨ <b>حيّاك الله أخي{html.escape(first_name)}</b>\n\n<blockquote>📌"
+      f"✨ <b>مرحباً بك عزيزي {html.escape(first_name)}</b>\n\n<blockquote>📌"
       " <i>أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، مع تحليلات ذكية"
       " ونظام الأوسمة وتحديات السرعة المتقدمة.</i></blockquote>\n\n🏅 <b>وسامك"
       f" الحالي:</b> {badge_icon} <b>{badge_name}</b>\n\n⚠️ <b>تنبيه هام"
@@ -473,7 +468,6 @@ def send_welcome(message):
   )
 
 
-# أمر الإحصائيات الشامل الجديد (/stats للمشرف)
 @bot.message_handler(commands=["stats"])
 def cmd_bot_statistics(message):
   if message.from_user.id != ADMIN_ID:
@@ -489,7 +483,6 @@ def cmd_bot_statistics(message):
   week_ago_ts = time.time() - (7 * 24 * 60 * 60)
   month_ago_ts = time.time() - (30 * 24 * 60 * 60)
 
-  # إحصائيات المستخدمين الجدد
   cursor.execute("SELECT COUNT(*) FROM user_profiles")
   total_users = cursor.fetchone()[0]
 
@@ -511,7 +504,6 @@ def cmd_bot_statistics(message):
   )
   users_month = cursor.fetchone()[0]
 
-  # إحصائيات التفاعلات والنشاط
   cursor.execute("SELECT COUNT(*) FROM interactions")
   total_interactions = cursor.fetchone()[0]
 
@@ -770,6 +762,16 @@ def show_admin_panel(chat_id):
   )
   markup.add(
       create_colored_btn(
+          "➕ إضافة كوبون جديد", callback_data="admin_add_coupon", style="success"
+      )
+  )
+  markup.add(
+      create_colored_btn(
+          "❌ إنهاء/حذف كوبون", callback_data="admin_end_coupon", style="danger"
+      )
+  )
+  markup.add(
+      create_colored_btn(
           "📊 إرسال التقرير الأسبوعي الفوري",
           callback_data="admin_send_weekly_report",
           style="success",
@@ -793,6 +795,82 @@ def show_admin_panel(chat_id):
       " <code>/stats</code>.</blockquote>"
   )
   bot.send_message(chat_id, admin_panel, parse_mode="HTML", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data in ['admin_add_coupon', 'admin_end_coupon'])
+def admin_coupon_callbacks(call):
+  if call.from_user.id != ADMIN_ID:
+    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
+    return
+  
+  if call.data == 'admin_add_coupon':
+    user_states[ADMIN_ID] = "waiting_admin_add_coupon"
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id,
+        'أرسل تفاصيل الكوبون الجديد بالصيغة التالية:\n`الكود القيمة`\nمثال: `WELCOME100 50`',
+        parse_mode='Markdown',
+    )
+
+  elif call.data == 'admin_end_coupon':
+    user_states[ADMIN_ID] = "waiting_admin_end_coupon"
+    bot.answer_callback_query(call.id)
+    bot.send_message(
+        call.message.chat.id,
+        'أرسل كود الكوبون المراد إنهاؤه وحذفه تماماً:',
+        parse_mode='Markdown',
+    )
+
+
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and user_states.get(ADMIN_ID) == "waiting_admin_add_coupon")
+def process_admin_add_coupon(message):
+  user_states.pop(ADMIN_ID, None)
+  try:
+    parts = message.text.split()
+    code = parts[0]
+    reward = int(parts[1])
+
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT OR REPLACE INTO coupons (code, points, max_uses, uses_count, is_closed) VALUES (?, ?, 999999, 0, 0)',
+        (code, reward),
+    )
+    conn.commit()
+    conn.close()
+
+    bot.reply_to(
+        message,
+        f'✅ تم إنشاء الكوبون `{code}` بقيمة `{reward}` نقطة بنجاح.',
+        parse_mode='Markdown',
+    )
+  except Exception as e:
+    bot.reply_to(
+        message,
+        f'❌ خطأ في الصيغة المرسلة. يرجى المحاولة مرة أخرى بالشكل الصحيح (كود مسافة قيمة).\nالتفاصيل: `{e}`',
+        parse_mode='Markdown'
+    )
+
+
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and user_states.get(ADMIN_ID) == "waiting_admin_end_coupon")
+def process_admin_end_coupon(message):
+  user_states.pop(ADMIN_ID, None)
+  try:
+    code = message.text.strip()
+
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM coupons WHERE code = ?', (code,))
+    conn.commit()
+    conn.close()
+
+    bot.reply_to(
+        message,
+        f'🗑️ تم إنهاء وحذف الكوبون `{code}` بنجاح من النظام.',
+        parse_mode='Markdown',
+    )
+  except Exception as e:
+    bot.reply_to(message, f'❌ حدث خطأ أثناء محاولة حذف الكوبون: `{e}`', parse_mode='Markdown')
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_set_forced_channel")
@@ -1380,1074 +1458,6 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
     )
 
 
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and user_states[message.from_user.id] == "waiting_sched_input"
-)
-def process_sched_title(message):
-  user_id = message.from_user.id
-  title = message.text.strip()
-  user_states[user_id] = {"sched_title": title, "step": "waiting_sched_channel"}
-  bot.reply_to(
-      message,
-      "📌 <i>أرسل الآن معرف القناة المراد النشر فيها تلقائياً (مثال:"
-      " @MyChannel):</i>",
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step")
-    == "waiting_sched_channel"
-)
-def process_sched_channel(message):
-  user_id = message.from_user.id
-  channel_input = message.text.strip()
-  user_states[user_id]["sched_channel"] = channel_input
-  user_states[user_id]["step"] = "waiting_sched_minutes"
-  bot.reply_to(
-      message,
-      "⏱️ <i>بعد كم دقيقة تريد أن يتم نشر هذا البوست تلقائياً في القناة؟ (أرسل"
-      " رقم بالدقائق، مثال: 30):</i>",
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step")
-    == "waiting_sched_minutes"
-)
-def process_sched_minutes(message):
-  user_id = message.from_user.id
-  try:
-    minutes = int(message.text.strip())
-  except ValueError:
-    bot.reply_to(message, "❌ يجِب إرسال رقم صحيح بالدقائق.")
-    return
-
-  sched_data = user_states.pop(user_id, None)
-  sched_id = f"sched_{user_id}_{int(time.time())}"
-  run_time = time.time() + (minutes * 60)
-
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "INSERT INTO scheduled_posts (sched_id, user_id, channel_id, post_type,"
-      " title, content_data, run_time) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      (
-          sched_id,
-          user_id,
-          sched_data["sched_channel"],
-          "poll",
-          sched_data["sched_title"],
-          "",
-          run_time,
-      ),
-  )
-  conn.commit()
-  conn.close()
-
-  bot.reply_to(
-      message,
-      f"⏰ <b>تمت جدولة البوست بنجاح!</b>\nسيتم نشره تلقائياً في القناة بعد"
-      f" <code>{minutes}</code> دقيقة.",
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and user_states[message.from_user.id] == "waiting_coupon_input"
-)
-def process_coupon_text_input(message):
-  user_id = message.from_user.id
-  code = message.text.strip()
-  user_states.pop(user_id, None)
-
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT points, max_uses, uses_count, is_closed FROM coupons WHERE code ="
-      " ?",
-      (code,),
-  )
-  c_row = cursor.fetchone()
-  if not c_row:
-    bot.reply_to(message, "❌ <b>عذراً، كود الكوبون غير صحيح.</b>", parse_mode="HTML")
-    conn.close()
-    return
-  pts, max_uses, uses_count, is_closed = c_row
-  if is_closed == 1 or uses_count >= max_uses:
-    bot.reply_to(
-        message,
-        "⌛ <b>عذراً، هذا الكوبون انتهى أو استنفد استخداماته!</b>",
-        parse_mode="HTML",
-    )
-    conn.close()
-    return
-  cursor.execute(
-      "SELECT * FROM coupon_uses WHERE code = ? AND user_id = ?", (code, user_id)
-  )
-  if cursor.fetchone():
-    bot.reply_to(message, "⚠️ <b>لقد استخدمت هذا الكوبون مسبقاً!</b>", parse_mode="HTML")
-    conn.close()
-    return
-  cursor.execute(
-      "INSERT INTO coupon_uses (code, user_id) VALUES (?, ?)", (code, user_id)
-  )
-  cursor.execute(
-      "UPDATE coupons SET uses_count = uses_count + 1 WHERE code = ?", (code,)
-  )
-  cursor.execute(
-      "INSERT INTO user_points (user_id, points) VALUES (?, ?) ON"
-      " CONFLICT(user_id) DO UPDATE SET points = points + ?",
-      (user_id, pts, pts),
-  )
-
-  cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
-  new_pts = cursor.fetchone()[0]
-  b_name, b_icon = get_user_badge(new_pts)
-  cursor.execute(
-      "INSERT OR REPLACE INTO user_badges (user_id, badge_name, badge_icon)"
-      " VALUES (?, ?, ?)",
-      (user_id, b_name, b_icon),
-  )
-  conn.commit()
-  conn.close()
-
-  bot.reply_to(
-      message,
-      f"🎉 <b>تم شحن الكوبون بنجاح!</b>\nأُضيف إلى رصيدك <code>{pts}</code>"
-      f" نقطة.\n🏅 الوسام الحالي: {b_icon} {b_name}",
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and user_states[message.from_user.id] == "waiting_q_text"
-)
-def q_step_text(message):
-  user_id = message.from_user.id
-  q_text = message.text.strip()
-  user_states[user_id] = {"q_text": q_text, "step": "waiting_opt_a"}
-  bot.reply_to(message, "📌 <i>أرسل الآن الخيار الأول (أ):</i>", parse_mode="HTML")
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step") == "waiting_opt_a"
-)
-def q_step_opt_a(message):
-  user_id = message.from_user.id
-  user_states[user_id]["opt_a"] = message.text.strip()
-  user_states[user_id]["step"] = "waiting_opt_b"
-  bot.reply_to(message, "📌 <i>أرسل الآن الخيار الثاني (ب):</i>", parse_mode="HTML")
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step") == "waiting_opt_b"
-)
-def q_step_opt_b(message):
-  user_id = message.from_user.id
-  user_states[user_id]["opt_b"] = message.text.strip()
-  user_states[user_id]["step"] = "waiting_opt_c"
-  bot.reply_to(message, "📌 <i>أرسل الآن الخيار الثالث (ج):</i>", parse_mode="HTML")
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step") == "waiting_opt_c"
-)
-def q_step_opt_c(message):
-  user_id = message.from_user.id
-  user_states[user_id]["opt_c"] = message.text.strip()
-  user_states[user_id]["step"] = "waiting_opt_d"
-  bot.reply_to(message, "📌 <i>أرسل الآن الخيار الرابع (د):</i>", parse_mode="HTML")
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step") == "waiting_opt_d"
-)
-def q_step_opt_d(message):
-  user_id = message.from_user.id
-  user_states[user_id]["opt_d"] = message.text.strip()
-  user_states[user_id]["step"] = "waiting_correct_opt"
-  markup = types.InlineKeyboardMarkup(row_width=2)
-  markup.add(
-      create_colored_btn("الخيار (أ)", callback_data="q_correct_A", style="success"),
-      create_colored_btn("الخيار (ب)", callback_data="q_correct_B", style="success"),
-      create_colored_btn("الخيار (ج)", callback_data="q_correct_C", style="success"),
-      create_colored_btn("الخيار (د)", callback_data="q_correct_D", style="success"),
-  )
-  bot.reply_to(
-      message,
-      "🎯 <i>اختر الإجابة الصحيحة من الأزرار أدناه:</i>",
-      parse_mode="HTML",
-      reply_markup=markup,
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("q_correct_"))
-def q_step_correct_chosen(call):
-  user_id = call.from_user.id
-  if user_id not in user_states or not isinstance(user_states[user_id], dict):
-    bot.answer_callback_query(call.id, "❌ انتهت الجلسة، ابدأ من جديد.", show_alert=True)
-    return
-  correct_opt = call.data.replace("q_correct_", "")
-  user_states[user_id]["correct_opt"] = correct_opt
-  user_states[user_id]["step"] = "waiting_q_channel"
-  bot.answer_callback_query(call.id)
-  bot.send_message(
-      call.message.chat.id,
-      "🚀 <i>أرسل الآن معرف قناتك لنشر السؤال التفاعلي مع (تحدي السرعة) فيها"
-      " (مثال: <code>@MyChannel</code>):</i>",
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and isinstance(user_states[message.from_user.id], dict)
-    and user_states[message.from_user.id].get("step") == "waiting_q_channel"
-)
-def q_step_publish(message):
-  user_id = message.from_user.id
-  channel_input = message.text.strip()
-  q_data = user_states.pop(user_id, None)
-
-  question_id = f"q_{user_id}_{int(time.time())}"
-  q_text = q_data["q_text"]
-  oa = q_data["opt_a"]
-  ob = q_data["opt_b"]
-  oc = q_data["opt_c"]
-  od = q_data["opt_d"]
-  correct_opt = q_data["correct_opt"]
-
-  keyboard = types.InlineKeyboardMarkup(row_width=2)
-  keyboard.add(
-      create_colored_btn(f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"),
-      create_colored_btn(f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"),
-      create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
-      create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary"),
-  )
-  keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
-
-  q_msg_content = (
-      f"💡 <b>سؤال تفاعلي مع (تحدي السرعة):</b>\n\n📌 <b>{html.escape(q_text)}</b>\n\n🔹 أ)"
-      f" {html.escape(oa)}\n🔹 ب) {html.escape(ob)}\n🔹 ج) {html.escape(oc)}\n🔹 د)"
-      f" {html.escape(od)}\n\n🏁 <b>لوحة شرف تحدي السرعة (أسرع 3 أجابوا"
-      " صح):</b>\n<blockquote>1. في انتظار الأسرع...\n2. في انتظار الأسرع...\n3."
-      " في انتظار الأسرع...</blockquote>\n\n<i>⏱️ اختر الإجابة الصحيحة الآن لتكون في"
-      f' لوحة الشرف!</i>\n\n<b><a href="{BOT_URL}">🤖 بوت دفتر الحضور</a></b>'
-  )
-
-  try:
-    sent_msg = bot.send_message(
-        channel_input, q_msg_content, parse_mode="HTML", reply_markup=keyboard
-    )
-    conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO questions (question_id, owner_id, question_text, opt_a,"
-        " opt_b, opt_c, opt_d, correct_opt, channel_id, message_id, is_closed)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-        (
-            question_id,
-            user_id,
-            q_text,
-            oa,
-            ob,
-            oc,
-            od,
-            correct_opt,
-            str(sent_msg.chat.id),
-            sent_msg.message_id,
-        ),
-    )
-    conn.commit()
-    conn.close()
-    bot.reply_to(
-        message,
-        "✅ <b>تم نشر السؤال التفاعلي مع نظام تحدي السرعة بنجاح في القناة!</b>",
-        parse_mode="HTML",
-    )
-  except Exception as e:
-    bot.reply_to(
-        message,
-        f"❌ <b>فشل نشر السؤال في القناة:</b>\n\n<blockquote>تأكد أن البوت مشرف"
-        f" ولديه صلاحيات الإرسال.\nالتفاصيل: <code>{e}</code></blockquote>",
-        parse_mode="HTML",
-    )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
-def handle_question_answer(call):
-  if not check_forced_subscription(call.from_user.id):
-    bot.answer_callback_query(
-        call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True
-    )
-    send_subscription_required_message(call.message.chat.id)
-    return
-
-  raw_data = call.data[4:]
-  last_underscore_idx = raw_data.rfind("_")
-  if last_underscore_idx == -1:
-    return
-  question_id = raw_data[:last_underscore_idx]
-  chosen_opt = raw_data[last_underscore_idx + 1 :]
-  user = call.from_user
-
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT owner_id, correct_opt, is_closed, question_text, opt_a, opt_b,"
-      " opt_c, opt_d, channel_id, message_id FROM questions WHERE question_id ="
-      " ?",
-      (question_id,),
-  )
-  q_row = cursor.fetchone()
-  if not q_row:
-    bot.answer_callback_query(
-        call.id, "❌ عذراً، هذا السؤال غير موجود أو انتهى.", show_alert=True
-    )
-    conn.close()
-    return
-  (
-      owner_id,
-      correct_opt,
-      is_closed,
-      q_text,
-      oa,
-      ob,
-      oc,
-      od,
-      channel_id,
-      message_id,
-  ) = q_row
-  if is_closed == 1:
-    bot.answer_callback_query(
-        call.id, "⌛ عذراً، تم إغلاق هذا السؤال!", show_alert=True
-    )
-    conn.close()
-    return
-  cursor.execute(
-      "SELECT * FROM question_answers WHERE question_id = ? AND user_id = ?",
-      (question_id, user.id),
-  )
-  if cursor.fetchone():
-    bot.answer_callback_query(
-        call.id, "⚠️ لقد قمت بالإجابة على هذا السؤال مسبقاً!", show_alert=True
-    )
-    conn.close()
-    return
-
-  is_correct = 1 if chosen_opt == correct_opt else 0
-  earned_points = 0
-  speed_bonus_note = ""
-
-  cursor.execute(
-      "SELECT full_name FROM user_profiles WHERE user_id = ?", (user.id,)
-  )
-  prof = cursor.fetchone()
-  fixed_name = prof[0] if prof else user.first_name
-
-  if is_correct == 1:
-    cursor.execute(
-        "SELECT COUNT(*) FROM question_speed_race WHERE question_id = ?",
-        (question_id,),
-    )
-    current_rank = cursor.fetchone()[0] + 1
-
-    if current_rank <= 3:
-      cursor.execute(
-          "INSERT INTO question_speed_race (question_id, user_id, user_name,"
-          " rank_pos) VALUES (?, ?, ?, ?)",
-          (question_id, user.id, fixed_name, current_rank),
-      )
-      if current_rank == 1:
-        earned_points = 25
-        speed_bonus_note = " 🚀 (المركز الأول في تحدي السرعة! +25 نقطة)"
-      elif current_rank == 2:
-        earned_points = 18
-        speed_bonus_note = " 🥈 (المركز الثاني في تحدي السرعة! +18 نقطة)"
-      elif current_rank == 3:
-        earned_points = 12
-        speed_bonus_note = " 🥉 (المركز الثالث في تحدي السرعة! +12 نقطة)"
-    else:
-      earned_points = 5
-      speed_bonus_note = " ✅ (إجابة صحيحة! +5 نقاط)"
-
-    cursor.execute(
-        "INSERT INTO user_points (user_id, points) VALUES (?, ?) ON"
-        " CONFLICT(user_id) DO UPDATE SET points = points + ?",
-        (user.id, earned_points, earned_points),
-    )
-
-    cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user.id,))
-    new_pts = cursor.fetchone()[0]
-    b_name, b_icon = get_user_badge(new_pts)
-    cursor.execute(
-        "INSERT OR REPLACE INTO user_badges (user_id, badge_name, badge_icon)"
-        " VALUES (?, ?, ?)",
-        (user.id, b_name, b_icon),
-    )
-  else:
-    earned_points = 0
-    speed_bonus_note = " ❌ (إجابة خاطئة!)"
-
-  cursor.execute(
-      "INSERT INTO question_answers (question_id, user_id, selected_option,"
-      " is_correct, earned_points) VALUES (?, ?, ?, ?, ?)",
-      (question_id, user.id, chosen_opt, is_correct, earned_points),
-  )
-
-  cursor.execute(
-      "SELECT rank_pos, user_name FROM question_speed_race WHERE question_id ="
-      " ? ORDER BY rank_pos ASC",
-      (question_id,),
-  )
-  speed_racers = cursor.fetchall()
-  conn.commit()
-  conn.close()
-
-  try:
-    racers_dict = {r[0]: r[1] for r in speed_racers}
-    r1 = racers_dict.get(1, "في انتظار الأسرع...")
-    r2 = racers_dict.get(2, "في انتظار الأسرع...")
-    r3 = racers_dict.get(3, "في انتظار الأسرع...")
-
-    updated_q_content = (
-        f"💡 <b>سؤال تفاعلي مع (تحدي السرعة):</b>\n\n📌 <b>{html.escape(q_text)}</b>\n\n🔹 أ)"
-        f" {html.escape(oa)}\n🔹 ب) {html.escape(ob)}\n🔹 ج) {html.escape(oc)}\n🔹 د)"
-        f" {html.escape(od)}\n\n🏁 <b>لوحة شرف تحدي السرعة (أسرع 3 أجابوا"
-        f" صح):</b>\n<blockquote>1. {html.escape(str(r1))}\n2."
-        f" {html.escape(str(r2))}\n3. {html.escape(str(r3))}</blockquote>\n\n<i>⏱️"
-        f' اختر الإجابة الصحيحة الآن لتكون في لوحة الشرف!</i>\n\n<b><a href="{BOT_URL}">🤖 بوت دفتر الحضور</a></b>'
-    )
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        create_colored_btn(f"أ) {oa}", callback_data=f"ans_{question_id}_A", style="primary"),
-        create_colored_btn(f"ب) {ob}", callback_data=f"ans_{question_id}_B", style="primary"),
-        create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
-        create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary"),
-    )
-    keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
-    bot.edit_message_text(
-        chat_id=channel_id,
-        message_id=message_id,
-        text=updated_q_content,
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
-  except Exception as e:
-    print(f"Error updating speed race message: {e}")
-
-  bot.answer_callback_query(call.id, f"{speed_bonus_note}", show_alert=True)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("view_stats_"))
-def view_poll_detailed_stats(call):
-  poll_id = call.data.replace("view_stats_", "")
-  user_id = call.from_user.id
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT title, count, end_time FROM polls WHERE poll_id = ? AND owner_id ="
-      " ?",
-      (poll_id, user_id),
-  )
-  poll = cursor.fetchone()
-  if not poll:
-    bot.answer_callback_query(
-        call.id, "❌ البوست غير موجود أو ليس لك صلاحية.", show_alert=True
-    )
-    conn.close()
-    return
-  title, count, end_time = poll
-  cursor.execute(
-      "SELECT user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,)
-  )
-  votes = cursor.fetchall()
-
-  cursor.execute(
-      "SELECT COUNT(DISTINCT user_id) FROM poll_votes WHERE poll_id = ?",
-      (poll_id,),
-  )
-  unique_users_count = cursor.fetchone()[0] or 0
-
-  cursor.execute("SELECT COUNT(*) FROM user_profiles")
-  total_bot_users = cursor.fetchone()[0] or 1
-  conn.close()
-
-  attendance_rate = round((unique_users_count / total_bot_users) * 100, 1)
-  if attendance_rate > 100:
-    attendance_rate = 100
-
-  voters_str = ""
-  if votes:
-    voters_lines = [
-        f"<blockquote>{i+1}. <b>{html.escape(v[0])}</b>"
-        f" ({html.escape(v[1])})</blockquote>"
-        for i, v in enumerate(votes)
-    ]
-    voters_str = "\n".join(voters_lines)
-  else:
-    voters_str = "<blockquote>• لم يسجل أحد حضوره حتى الآن.</blockquote>"
-
-  stats_detail_msg = (
-      f"📊 <b>التحليلات المتقدمة وإحصائيات البوست:</b>\n\n<blockquote>• <b>عنوان"
-      f" البوست:</b> <code>{html.escape(title)}</code>\n• <b>إجمالي التفاعلات"
-      f" (Total):</b> <code>{count}</code> تفاعل\n• <b>الأشخاص الفريدون (Unique"
-      f" Reach):</b> <code>{unique_users_count}</code> مستخدم حقيقي\n• <b>معدل"
-      f" التفاعل الفعلي (Engagement Rate):</b>"
-      f" <code>{attendance_rate}%</code></blockquote>\n\n💡 <i>ملاحظة تحليلية:"
-      " تم فصل الأرقام لتوضيح تداخل المشتركين بدقة وعكس الواقع الفعلي"
-      f" للتفاعل.</i>\n\n👥 <b>قائمة الحاضرين المسجلين:</b>\n{voters_str}"
-  )
-  markup = types.InlineKeyboardMarkup(row_width=1)
-  markup.add(
-      create_colored_btn(
-          "📥 تحميل كشف الحضور (CSV)",
-          callback_data=f"export_{poll_id}",
-          style="primary",
-      )
-  )
-  markup.add(
-      create_colored_btn(
-          "🗑️ حذف البوست نهائياً",
-          callback_data=f"delete_poll_{poll_id}",
-          style="danger",
-      )
-  )
-  markup.add(
-      create_colored_btn(
-          "🔙 العودة للإحصائيات", callback_data="menu_stats", style="success"
-      )
-  )
-
-  bot.answer_callback_query(call.id)
-  bot.edit_message_text(
-      chat_id=call.message.chat.id,
-      message_id=call.message.message_id,
-      text=stats_detail_msg,
-      parse_mode="HTML",
-      reply_markup=markup,
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_poll_"))
-def delete_poll_callback(call):
-  poll_id = call.data.replace("delete_poll_", "")
-  user_id = call.from_user.id
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT channel_id, message_id FROM polls WHERE poll_id = ? AND"
-      " owner_id = ?",
-      (poll_id, user_id),
-  )
-  poll = cursor.fetchone()
-  if not poll:
-    bot.answer_callback_query(call.id, "❌ البوست غير موجود.", show_alert=True)
-    conn.close()
-    return
-  channel_id, message_id = poll
-  try:
-    bot.delete_message(chat_id=channel_id, message_id=message_id)
-  except Exception:
-    pass
-  cursor.execute("DELETE FROM polls WHERE poll_id = ?", (poll_id,))
-  cursor.execute("DELETE FROM poll_votes WHERE poll_id = ?", (poll_id,))
-  conn.commit()
-  conn.close()
-  bot.answer_callback_query(call.id, "✅ تم حذف البوست بنجاح!", show_alert=True)
-  bot.edit_message_text(
-      chat_id=call.message.chat.id,
-      message_id=call.message.message_id,
-      text="🗑️ <b>تم حذف البوست وسجله بنجاح.</b>",
-      parse_mode="HTML",
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "wizard_title_type")
-def wizard_title_type(call):
-  bot.answer_callback_query(call.id)
-  markup = types.InlineKeyboardMarkup(row_width=1)
-  markup.add(
-      create_colored_btn(
-          "✏️ اسم يدوي (اكتبه بنفسك)",
-          callback_data="w_title_manual",
-          style="primary",
-      ),
-      create_colored_btn(
-          f"📅 اسم تلقائي باليوم والتاريخ ({get_arabic_date_string()})",
-          callback_data="w_title_auto",
-          style="success",
-      ),
-  )
-  bot.send_message(
-      call.message.chat.id,
-      "📌 <i>اختر كيف تريد تسمية بوست الحضور الجديد:</i>",
-      parse_mode="HTML",
-      reply_markup=markup,
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "w_title_manual")
-def wizard_title_manual(call):
-  user_states[call.from_user.id] = "waiting_manual_title"
-  bot.answer_callback_query(call.id)
-  bot.send_message(
-      call.message.chat.id,
-      "📝 <i>أرسل الآن العنوان أو الكليشة اليدوية التي تريدها للبوست:</i>",
-      parse_mode="HTML",
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "w_title_auto")
-def wizard_title_auto(call):
-  user_id = call.from_user.id
-  auto_title = f"سجل الحضور — {get_arabic_date_string()}"
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "INSERT OR IGNORE INTO user_settings (user_id, title, duration,"
-      " show_in_channel) VALUES (?, ?, 0, 1)",
-      (user_id, auto_title),
-  )
-  cursor.execute(
-      "UPDATE user_settings SET title = ? WHERE user_id = ?",
-      (auto_title, user_id),
-  )
-  conn.commit()
-  conn.close()
-  bot.answer_callback_query(call.id, "✅ تم اعتماد اسم التاريخ تلقائياً!")
-  ask_duration_wizard(call.message)
-
-
-def ask_duration_wizard(message):
-  markup = types.InlineKeyboardMarkup(row_width=3)
-  markup.add(
-      create_colored_btn("5 دقائق", callback_data="w_dur_5", style="primary"),
-      create_colored_btn("10 دقائق", callback_data="w_dur_10", style="primary"),
-      create_colored_btn("30 دقيقة", callback_data="w_dur_30", style="primary"),
-  )
-  markup.add(
-      create_colored_btn("ساعة واحدة", callback_data="w_dur_60", style="primary"),
-      create_colored_btn("ساعتين", callback_data="w_dur_120", style="primary"),
-      create_colored_btn(
-          "بدون وقت إغلاق (مفتوح)", callback_data="w_dur_0", style="success"
-      ),
-  )
-  bot.send_message(
-      message.chat.id,
-      "⏱️ <i>اختر المدة الزمنية لصلاحية البوست بعد نشره:</i>",
-      parse_mode="HTML",
-      reply_markup=markup,
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "set_duration")
-def callback_set_duration(call):
-  bot.answer_callback_query(call.id)
-  ask_duration_wizard(call.message)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("w_dur_"))
-def handle_wizard_duration(call):
-  user_id = call.from_user.id
-  duration = int(call.data.replace("w_dur_", ""))
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "UPDATE user_settings SET duration = ? WHERE user_id = ?",
-      (duration, user_id),
-  )
-  conn.commit()
-  conn.close()
-  bot.answer_callback_query(call.id, "✅ تم حفظ الوقت بنجاح!")
-
-  markup = types.InlineKeyboardMarkup(row_width=1)
-  markup.add(
-      create_colored_btn(
-          "📺 عرض الأسماء في رسالة البوست بالقناة",
-          callback_data="w_show_1",
-          style="success",
-      ),
-      create_colored_btn(
-          "🔒 إخفاء الأسماء من القناة وإرسالها للخاص فقط",
-          callback_data="w_show_0",
-          style="primary",
-      ),
-  )
-  bot.send_message(
-      call.message.chat.id,
-      "👁️ <b>كيف تريد عرض قائمة أسماء الحضور المسجلين؟</b>\n\n<blockquote>ملاحظة:"
-      " في الحالتين سيصلك الكشف الكامل على الخاص.</blockquote>",
-      parse_mode="HTML",
-      reply_markup=markup,
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("w_show_"))
-def handle_wizard_show_mode(call):
-  user_id = call.from_user.id
-  show_mode = int(call.data.replace("w_show_", ""))
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "UPDATE user_settings SET show_in_channel = ? WHERE user_id = ?",
-      (show_mode, user_id),
-  )
-  conn.commit()
-  conn.close()
-  bot.answer_callback_query(call.id, "✨ تم حفظ الإعدادات بنجاح وانتقال للنشر!")
-  show_channel_selection_menu(call.message.chat.id, user_id)
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and user_states[message.from_user.id] == "waiting_manual_title"
-)
-def save_manual_title(message):
-  user_id = message.from_user.id
-  title = message.text
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "INSERT OR IGNORE INTO user_settings (user_id, title, duration,"
-      " show_in_channel) VALUES (?, ?, 0, 1)",
-      (user_id, title),
-  )
-  cursor.execute(
-      "UPDATE user_settings SET title = ? WHERE user_id = ?", (title, user_id)
-  )
-  conn.commit()
-  conn.close()
-  user_states.pop(user_id, None)
-  bot.reply_to(message, "✅ <i>تم حفظ عنوان البوست بنجاح!</i>", parse_mode="HTML")
-  ask_duration_wizard(message)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "set_display_mode")
-def callback_set_display_mode(call):
-  bot.answer_callback_query(call.id)
-  markup = types.InlineKeyboardMarkup(row_width=1)
-  markup.add(
-      create_colored_btn(
-          "📺 عرض القائمة بالقناة", callback_data="w_show_1", style="success"
-      ),
-      create_colored_btn(
-          "🔒 إرسال الكشف للخاص فقط", callback_data="w_show_0", style="primary"
-      ),
-  )
-  bot.send_message(
-      call.message.chat.id,
-      "👁️ <i>اختر طريقة عرض الكشف:</i>",
-      parse_mode="HTML",
-      reply_markup=markup,
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("export_"))
-def export_attendance_csv(call):
-  poll_id = call.data.replace("export_", "")
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT title FROM polls WHERE poll_id = ? AND owner_id = ?",
-      (poll_id, call.from_user.id),
-  )
-  poll = cursor.fetchone()
-  if not poll:
-    bot.answer_callback_query(
-        call.id, "❌ البوست غير موجود أو ليس لك صلاحية.", show_alert=True
-    )
-    conn.close()
-    return
-  title = poll[0]
-  cursor.execute(
-      "SELECT user_id, user_name, username FROM poll_votes WHERE poll_id = ?",
-      (poll_id,),
-  )
-  votes = cursor.fetchall()
-  conn.close()
-
-  output = io.StringIO()
-  writer = csv.writer(output)
-  writer.writerow(["User ID", "Full Name", "Username"])
-  for uid, name, uname in votes:
-    writer.writerow([uid, name, uname])
-  output.seek(0)
-
-  bytes_io = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-  bytes_io.name = f"attendance_{poll_id}.csv"
-  bot.answer_callback_query(call.id)
-  bot.send_document(
-      call.message.chat.id,
-      bytes_io,
-      caption=f"📄 <b>كشف الحضور لبوست:</b>\n<code>{html.escape(title)}</code>",
-      parse_mode="HTML",
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
-def admin_broadcast_prompt(call):
-  if call.from_user.id != ADMIN_ID:
-    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
-    return
-  user_states[ADMIN_ID] = "waiting_broadcast_msg"
-  bot.answer_callback_query(call.id)
-  bot.send_message(
-      ADMIN_ID,
-      "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast):</i>",
-      parse_mode="HTML",
-  )
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "admin_send_weekly_report")
-def send_weekly_report_manual(call):
-  if call.from_user.id != ADMIN_ID:
-    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
-    return
-  bot.answer_callback_query(call.id)
-  send_weekly_report_to_admin()
-  bot.send_message(
-      ADMIN_ID,
-      "📊 <b>تم إرسال التقرير الأسبوعي التحليلي الشامل بنجاح!</b>",
-      parse_mode="HTML",
-  )
-
-
-def send_weekly_report_to_admin():
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-
-  now_ts = time.time()
-  week_ago_ts = now_ts - (7 * 24 * 60 * 60)
-  two_weeks_ago_ts = now_ts - (14 * 24 * 60 * 60)
-
-  cursor.execute(
-      "SELECT COUNT(*) FROM poll_votes WHERE vote_timestamp >= ?",
-      (week_ago_ts,),
-  )
-  current_week_attendance = cursor.fetchone()[0] or 0
-
-  cursor.execute(
-      "SELECT COUNT(*) FROM poll_votes WHERE vote_timestamp >= ? AND"
-      " vote_timestamp < ?",
-      (two_weeks_ago_ts, week_ago_ts),
-  )
-  prev_week_attendance = cursor.fetchone()[0] or 0
-
-  if prev_week_attendance > 0:
-    growth_rate = round(
-        (
-            (current_week_attendance - prev_week_attendance)
-            / prev_week_attendance
-        )
-        * 100,
-        1,
-    )
-  else:
-    growth_rate = 100.0 if current_week_attendance > 0 else 0.0
-
-  growth_sign = "+" if growth_rate >= 0 else ""
-
-  cursor.execute("""
-        SELECT date_str, SUM(count) as total_cnt 
-        FROM channel_daily_attendance 
-        GROUP BY date_str 
-        ORDER BY total_cnt DESC 
-        LIMIT 1
-    """)
-  top_day_row = cursor.fetchone()
-  if top_day_row and top_day_row[0]:
-    days_trans = {
-        "Saturday": "السبت",
-        "Sunday": "الأحد",
-        "Monday": "الإثنين",
-        "Tuesday": "الثلاثاء",
-        "Wednesday": "الأربعاء",
-        "Thursday": "الخميس",
-        "Friday": "الجمعة",
-    }
-    try:
-      dt_obj = datetime.strptime(top_day_row[0], "%Y-%m-%d")
-      day_name_ar = days_trans.get(dt_obj.strftime("%A"), dt_obj.strftime("%A"))
-      top_day_str = (
-          f"{day_name_ar} ({top_day_row[0]}) - إجمالي التفاعلات:"
-          f" {top_day_row[1]}"
-      )
-    except Exception:
-      top_day_str = f"{top_day_row[0]} - التفاعلات: {top_day_row[1]}"
-  else:
-    top_day_str = "لا توجد بيانات كافية بعد"
-
-  cursor.execute("SELECT COUNT(*) FROM user_profiles")
-  total_users = cursor.fetchone()[0] or 0
-  cursor.execute("SELECT COUNT(*) FROM polls")
-  total_polls = cursor.fetchone()[0] or 0
-
-  conn.close()
-
-  report_text = (
-      f"📊 <b>التقرير الأسبوعي الآلي لأداء البوت والقنوات:</b>\n\n<blockquote>•"
-      f" <b>إجمالي الحضور هذا الأسبوع:</b> <code>{current_week_attendance}</code>"
-      f" تفاعل\n• <b>أكثر الأيام تفاعلاً:</b> <code>{top_day_str}</code>\n•"
-      f" <b>نسبة نمو التفاعل:</b> <code>{growth_sign}{growth_rate}%</code> مقارنة"
-      f" بالأسبوع السابق\n• <b>إجمالي المستخدمين المسجلين:</b>"
-      f" <code>{total_users}</code> مستخدم\n• <b>إجمالي بوستات الحضور"
-      f" النشطة:</b> <code>{total_polls}</code> بوست</blockquote>\n\n💡 <i>يتم"
-      " إرسال هذا التقرير التحليلي الآلي أسبوعياً لإعطاء نظرة شاملة لصناع"
-      " المحتوى وأصحاب القنوات.</i>"
-  )
-  try:
-    bot.send_message(ADMIN_ID, report_text, parse_mode="HTML")
-  except Exception as e:
-    print(f"Error sending weekly report: {e}")
-
-
-def send_weekly_report_to_supervisors():
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("SELECT DISTINCT user_id FROM saved_channels")
-  supervisors = cursor.fetchall()
-
-  today = datetime.now()
-  dates_of_week = [
-      (today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)
-  ]
-
-  for (uid,) in supervisors:
-    cursor.execute(
-        "SELECT channel_id, channel_title FROM saved_channels WHERE user_id ="
-        " ?",
-        (uid,),
-    )
-    channels = cursor.fetchall()
-    report_msg = "📊 <b>تقرير نشاط قنواتك الأسبوعي (تلقائي):</b>\n\n"
-    has_activity = False
-
-    for cid, ctitle in channels:
-      cursor.execute(
-          f"SELECT date_str, posts_count FROM channel_daily_posts WHERE"
-          f" channel_id = ? AND date_str IN ({','.join(['?']*7)})",
-          (cid, *dates_of_week),
-      )
-      activity = cursor.fetchall()
-      if activity:
-        has_activity = True
-        report_msg += f"📢 <b>قناة: {html.escape(ctitle)}</b>\n"
-        for date_str, p_count in activity:
-          report_msg += (
-              f"  • يوم <code>{date_str}</code>: تم نشر {p_count} بوست حضور\n"
-          )
-
-        cursor.execute(
-            f"SELECT SUM(count) FROM channel_daily_attendance WHERE channel_id"
-            f" = ? AND date_str IN ({','.join(['?']*7)})",
-            (cid, *dates_of_week),
-        )
-        total_att = cursor.fetchone()[0] or 0
-        report_msg += (
-            f"  👥 <i>إجمالي الحضور الأسبوعي في القناة: <b>{total_att}</b></i>\n\n"
-        )
-
-    if has_activity:
-      try:
-        bot.send_message(uid, report_msg, parse_mode="HTML")
-      except:
-        pass
-  conn.close()
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id == ADMIN_ID
-    and message.from_user.id in user_states
-    and user_states[message.from_user.id] == "waiting_broadcast_msg"
-)
-def execute_broadcast(message):
-  user_states.pop(ADMIN_ID, None)
-  broadcast_text = message.text
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("SELECT user_id FROM user_profiles")
-  users = cursor.fetchall()
-  conn.close()
-
-  success_count = 0
-  fail_count = 0
-  status_msg = bot.reply_to(
-      message,
-      "🚀 <i>جاري بدء إرسال الرسالة الجماعية لجميع المستخدمين..</i>",
-      parse_mode="HTML",
-  )
-  for (uid,) in users:
-    try:
-      bot.send_message(
-          uid,
-          f"📢 <b>تنبيه هام من الإدارة:</b>\n\n<blockquote>{broadcast_text}</blockquote>",
-          parse_mode="HTML",
-      )
-      success_count += 1
-    except Exception:
-      fail_count += 1
-  bot.edit_message_text(
-      chat_id=message.chat.id,
-      message_id=status_msg.message_id,
-      text=(
-          "✅ <b>تم الانتهاء من الإرسال الجماعي بنجاح!</b>\n\n<blockquote>• تم"
-          f" بنجاح: <code>{success_count}</code>\n• فشل (حظروا البوت أو أوقفوه):"
-          f" <code>{fail_count}</code></blockquote>"
-      ),
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id in user_states
-    and user_states[message.from_user.id] == "waiting_support_msg"
-)
-def forward_support_message(message):
-  user_id = message.from_user.id
-  user_states.pop(user_id, None)
-  support_forward = (
-      f"📩 <b>رسالة دعم فني جديدة:</b>\n\n<blockquote>• الاسم:"
-      f" {html.escape(message.from_user.first_name)}\n• الأيدي:"
-      f" <code>{user_id}</code>\n• المعرف: @{html.escape(message.from_user.username) if message.from_user.username else 'لا يوجد'}</blockquote>\n\n💬"
-      f" <b>النص:</b>\n<blockquote>{html.escape(message.text)}</blockquote>"
-  )
-  admin_markup = types.InlineKeyboardMarkup()
-  admin_markup.add(
-      create_colored_btn(
-          "💬 الرد على المستخدم",
-          callback_data=f"reply_{user_id}",
-          style="primary",
-      )
-  )
-  try:
-    bot.send_message(
-        ADMIN_ID, support_forward, parse_mode="HTML", reply_markup=admin_markup
-    )
-    bot.reply_to(
-        message, "✅ <i>تم إرسال رسالتك بنجاح إلى الإدارة!</i>", parse_mode="HTML"
-    )
-  except Exception:
-    bot.reply_to(message, "❌ حدث خطأ أثناء إرسال الرسالة.")
-
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
 def handle_channel_attendance(call):
   if not check_forced_subscription(call.from_user.id):
@@ -2464,64 +1474,21 @@ def handle_channel_attendance(call):
 
   conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
   cursor = conn.cursor()
-  uname_str = f"@{user.username}" if user.username else "لا يوجد"
   cursor.execute(
-      "SELECT full_name FROM user_profiles WHERE user_id = ?", (user.id,)
-  )
-  prof = cursor.fetchone()
-  if prof:
-    fixed_name = prof[0]
-  else:
-    fixed_name = user.first_name
-    cursor.execute(
-        "INSERT INTO user_profiles (user_id, full_name, username,"
-        " joined_timestamp) VALUES (?, ?, ?, ?)",
-        (user.id, fixed_name, uname_str, current_time),
-    )
-    conn.commit()
-
-  cursor.execute(
-      "SELECT owner_id, count, title, end_time, is_closed, show_in_channel,"
-      " channel_id, message_id FROM polls WHERE poll_id = ?",
+      "SELECT owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id FROM polls WHERE poll_id = ?",
       (poll_id,),
   )
   poll = cursor.fetchone()
+
   if not poll:
-    bot.answer_callback_query(call.id, "❌ انتهت صلاحية هذا البوست.", show_alert=True)
+    bot.answer_callback_query(call.id, "❌ عذراً، بوست الحضور غير موجود.", show_alert=True)
     conn.close()
     return
 
-  (
-      owner_id,
-      count,
-      title,
-      end_time,
-      is_closed,
-      show_in_channel,
-      channel_id,
-      message_id,
-  ) = poll
+  owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id = poll
+
   if is_closed == 1 or (end_time > 0 and current_time > end_time):
-    bot.answer_callback_query(
-        call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True
-    )
-    conn.close()
-    return
-
-  cursor.execute(
-      "SELECT count FROM channel_daily_attendance WHERE user_id = ? AND"
-      " channel_id = ? AND date_str = ?",
-      (user.id, channel_id, today_str),
-  )
-  att_row = cursor.fetchone()
-  att_count = att_row[0] if att_row else 0
-  if att_count >= 2:
-    bot.answer_callback_query(
-        call.id,
-        "⚠️ لقد وصلت للحد الأقصى لتسجيل الحضور في هذه القناة اليوم (مرتان فقط"
-        " يومياً).",
-        show_alert=True,
-    )
+    bot.answer_callback_query(call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True)
     conn.close()
     return
 
@@ -2530,213 +1497,80 @@ def handle_channel_attendance(call):
       (poll_id, user.id),
   )
   if cursor.fetchone():
-    bot.answer_callback_query(
-        call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً في هذا البوست!", show_alert=True
-    )
+    bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً في هذا البوست!", show_alert=True)
     conn.close()
     return
 
   cursor.execute(
-      "INSERT INTO channel_daily_attendance (user_id, channel_id, date_str,"
-      " count) VALUES (?, ?, ?, 1) ON CONFLICT(user_id, channel_id, date_str) DO"
-      " UPDATE SET count = count + 1",
-      (user.id, channel_id, today_str),
+      "SELECT full_name FROM user_profiles WHERE user_id = ?", (user.id,)
   )
+  prof = cursor.fetchone()
+  fixed_name = prof[0] if prof else user.first_name
+  uname_str = f"@{user.username}" if user.username else "لا يوجد"
 
-  new_count = count + 1
   cursor.execute(
-      "UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id)
-  )
-  cursor.execute(
-      "INSERT INTO poll_votes (poll_id, user_id, user_name, username,"
-      " vote_timestamp) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO poll_votes (poll_id, user_id, user_name, username, vote_timestamp) VALUES (?, ?, ?, ?, ?)",
       (poll_id, user.id, fixed_name, uname_str, current_time),
   )
-  cursor.execute(
-      "INSERT INTO user_points (user_id, points) VALUES (?, 5) ON"
-      " CONFLICT(user_id) DO UPDATE SET points = points + 5",
-      (user.id,),
-  )
+  
+  new_count = count + 1
+  cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
 
-  cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user.id,))
-  new_pts = cursor.fetchone()[0]
-  b_name, b_icon = get_user_badge(new_pts)
+  attendance_points = 5
   cursor.execute(
-      "INSERT OR REPLACE INTO user_badges (user_id, badge_name, badge_icon)"
-      " VALUES (?, ?, ?)",
+      "INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?",
+      (user.id, attendance_points, attendance_points),
+  )
+  cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user.id,))
+  user_pts = cursor.fetchone()[0]
+  b_name, b_icon = get_user_badge(user_pts)
+  cursor.execute(
+      "INSERT OR REPLACE INTO user_badges (user_id, badge_name, badge_icon) VALUES (?, ?, ?)",
       (user.id, b_name, b_icon),
   )
 
   cursor.execute(
-      "SELECT user_name FROM poll_votes WHERE poll_id = ?", (poll_id,)
+      "INSERT INTO channel_daily_attendance (user_id, channel_id, date_str, count) VALUES (?, ?, ?, 1) ON CONFLICT(user_id, channel_id, date_str) DO UPDATE SET count = count + 1",
+      (user.id, channel_id, today_str),
   )
-  all_voters = cursor.fetchall()
+
+  cursor.execute("SELECT user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,))
+  all_votes = cursor.fetchall()
   conn.commit()
   conn.close()
 
-  owner_notification = (
-      f"🔔 <b>تسجيل حضور جديد في بوستك!</b>\n\n<blockquote>• البوست:"
-      f" {html.escape(title)}\n• المسجل: {html.escape(fixed_name)}\n• المعرف:"
-      f" <code>{html.escape(uname_str)}</code>\n• الأيدي:"
-      f" <code>{user.id}</code></blockquote>"
-  )
   try:
-    bot.send_message(owner_id, owner_notification, parse_mode="HTML")
-  except Exception:
-    pass
-
-  try:
-    new_keyboard = types.InlineKeyboardMarkup()
-    new_keyboard.add(
+    keyboard = types.InlineKeyboardMarkup()
+    keyboard.add(
         create_colored_btn(
-            f"✅ تسجيل الحضور [{new_count}]",
-            callback_data=f"attend_{poll_id}",
-            style="success",
+            f"✅ تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}", style="success"
         )
     )
-    new_keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
-    voters_list_str = ""
-    if show_in_channel == 1:
-      if all_voters:
-        voters_lines = [
-            f"{i+1}. {html.escape(v[0])}" for i, v in enumerate(all_voters)
-        ]
-        voters_list_str = "\n".join(voters_lines)
-      else:
-        voters_list_str = "لا توجد تسجيلات حتى الآن."
+    keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
 
-    updated_text = (
-        f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل"
-        " حضورك الرسمي فوراً:</i>"
-    )
+    msg_content = f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:</i>"
+    
     if show_in_channel == 1:
-      updated_text += (
-          f"\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين"
-          f" ({new_count}):</b>\n{voters_list_str}</blockquote>"
-      )
+      voters_lines = [f"{i+1}. <b>{html.escape(v[0])}</b>" for i, v in enumerate(all_votes)]
+      voters_preview = "\n".join(voters_lines[:15]) if voters_lines else "لا توجد تسجيلات."
+      msg_content += f"\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين ({new_count}):</b>\n{voters_preview}</blockquote>"
 
-    updated_text += f'\n\n<b><a href="{BOT_URL}">🤖 بوت دفتر الحضور</a></b>'
+    msg_content += f'\n\n<b><a href="{BOT_URL}">🤖 بوت دفتر الحضور</a></b>'
 
     bot.edit_message_text(
         chat_id=channel_id,
         message_id=message_id,
-        text=updated_text,
+        text=msg_content,
         parse_mode="HTML",
-        reply_markup=new_keyboard,
+        reply_markup=keyboard,
     )
   except Exception as e:
-    print(f"Error editing message directly: {e}")
+    print(f"Error updating channel poll message: {e}")
 
-  bot.answer_callback_query(
-      call.id,
-      f"✨ تم تسجيل حضورك بنجاح يا {fixed_name} وحصلت على 5 نقاط!\n🏅 الوسام:"
-      f" {b_icon} {b_name}",
-      show_alert=True,
-  )
-
-
-def background_scheduler_loop():
-  last_weekly_report_day = -1
-  while True:
-    try:
-      current_t = time.time()
-      now_dt = datetime.now()
-
-      if (
-          now_dt.weekday() == 4
-          and now_dt.hour == 10
-          and now_dt.day != last_weekly_report_day
-      ):
-        send_weekly_report_to_admin()
-        send_weekly_report_to_supervisors()
-        last_weekly_report_day = now_dt.day
-
-      conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-      cursor = conn.cursor()
-      cursor.execute(
-          "SELECT sched_id, user_id, channel_id, title FROM scheduled_posts"
-          " WHERE run_time <= ?",
-          (current_t,),
-      )
-      due_posts = cursor.fetchall()
-
-      for sched_id, user_id, channel_id, title in due_posts:
-        try:
-          poll_id = f"poll_sched_{user_id}_{int(time.time())}"
-          keyboard = types.InlineKeyboardMarkup()
-          keyboard.add(
-              create_colored_btn(
-                  "✅ تسجيل الحضور [0]",
-                  callback_data=f"attend_{poll_id}",
-                  style="success",
-              )
-          )
-          keyboard.add(
-              create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary")
-          )
-
-          msg_content = (
-              f"<b>📢 {html.escape(title)}</b>\n\n<i>(بوست مجدول تلقائياً) - اضغط"
-              f" على الزر أدناه لتسجيل حضورك:</i>\n\n<b><a"
-              f' href="{BOT_URL}">🤖 بوت دفتر الحضور</a></b>'
-          )
-
-          sent_msg = bot.send_message(
-              channel_id, msg_content, parse_mode="HTML", reply_markup=keyboard
-          )
-          cursor.execute(
-              "INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title,"
-              " end_time, is_closed, show_in_channel, channel_id, message_id)"
-              " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              (
-                  poll_id,
-                  user_id,
-                  0,
-                  title,
-                  0,
-                  0,
-                  1,
-                  channel_id,
-                  sent_msg.message_id,
-              ),
-          )
-        except Exception as ex:
-          print(f"Error publishing scheduled post: {ex}")
-
-        cursor.execute(
-            "DELETE FROM scheduled_posts WHERE sched_id = ?", (sched_id,)
-        )
-        conn.commit()
-      conn.close()
-    except Exception as e:
-      print(f"Background worker error: {e}")
-    time.sleep(60)
-
-
-threading.Thread(target=background_scheduler_loop, daemon=True).start()
-
-
-@app.route("/" + TOKEN, methods=["POST"])
-def webhook_listener():
-  if request.headers.get("content-type") == "application/json":
-    json_str = request.get_data().decode("UTF-8")
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return "OK", 200
-  else:
-    return "Forbidden", 403
-
-
-@app.route("/")
-def index():
-  return (
-      "Bot is running perfectly with advanced analytics, badges, scheduling,"
-      " speed races, automated weekly reports, user tracking and forced"
-      " subscription!",
-      200,
-  )
+  bot.answer_callback_query(call.id, f"🎉 تم تسجيل حضورك بنجاح! +{attendance_points} نقطة", show_alert=True)
 
 
 if __name__ == "__main__":
+  print("Bot is running successfully...")
   port = int(os.environ.get("PORT", 5000))
   app.run(host="0.0.0.0", port=port)
