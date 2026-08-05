@@ -16,7 +16,7 @@ def init_db():
             custom_message TEXT
         )
     ''')
-    # جدول البوستات (الروليت)
+    # جدول البوستات (الروليت والحضور)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS polls (
             poll_id TEXT PRIMARY KEY,
@@ -25,7 +25,7 @@ def init_db():
             title TEXT
         )
     ''')
-    # جدول لتسجيل من ضغط عشان العضو ما يضغطش مرتين في نفس البوست
+    # جدول لمنع تكرار الضغط من نفس المستخدم في نفس البوست
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS poll_votes (
             poll_id TEXT,
@@ -39,22 +39,22 @@ def init_db():
 init_db()
 user_states = {}
 
+# دالة تصميم الأزرار السفلية بشكل هندسي ومنظم
+def get_main_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    buttons = [
+        [types.KeyboardButton("⚙️ إعدادات البوست"), types.KeyboardButton("🔗 مشاركة وتفعيل ⚡️")],
+        [types.KeyboardButton("📊 إحصائيات الحضور 💎")],
+        [types.KeyboardButton("👑 قائمة المتصدرين"), types.KeyboardButton("📞 الدعم والمساعدة")]
+    ]
+    for row in buttons:
+        markup.add(*row)
+    return markup
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
-    
-    # 1. تصميم كيبورد سفلي فخم (نفس طريقة الصورة)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_config = types.KeyboardButton("⚙️ إعدادات البوست")
-    btn_share = types.KeyboardButton("🔗 مشاركة وتفعيل ⚡️")
-    btn_stats = types.KeyboardButton("📊 إحصائيات الحضور 💎")
-    btn_leaderboard = types.KeyboardButton("👑 قائمة المتصدرين")
-    btn_help = types.KeyboardButton("📞 الدعم والمساعدة")
-    
-    # ترتيب الأزرار هندسياً
-    markup.add(btn_config, btn_share)
-    markup.add(btn_stats)
-    markup.add(btn_leaderboard, btn_help)
+    markup = get_main_keyboard()
     
     # حساب إجمالي عدد الزوار/النقاط لهذا المستخدم من قاعدة البيانات
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
@@ -64,7 +64,6 @@ def send_welcome(message):
     total_visits = res[0] if res and res[0] else 0
     conn.close()
     
-    # 2. تنسيق النص باحترافية عالية (HTML Blockquotes)
     welcome_text = (
         f"<b>أهلاً بك - {message.from_user.first_name}.</b> 🤖\n\n"
         "<blockquote>هنا تقدر تصنع بوستات حضور، تدير مسابقاتك، وتستقبل التفاعلات بكل احترافية وأمان..</blockquote>\n\n"
@@ -77,7 +76,7 @@ def send_welcome(message):
     
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="HTML")
 
-# --- استجابة للأزرار السفلية الفخمة ---
+# --- استجابة للأزرار السفلية ---
 @bot.message_handler(func=lambda message: message.text in ["⚙️ إعدادات البوست", "🔗 مشاركة وتفعيل ⚡️", "📊 إحصائيات الحضور 💎", "👑 قائمة المتصدرين", "📞 الدعم والمساعدة"])
 def handle_menu_buttons(message):
     user_id = message.from_user.id
@@ -112,7 +111,7 @@ def handle_menu_buttons(message):
     else:
         bot.reply_to(message, "🛠 **هذه الميزة قيد التطوير وسيتم إضافتها في التحديث القادم!**", parse_mode="Markdown")
 
-# استقبال الكليشة وإفظها
+# حفظ الكليشة
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_title")
 def save_title(message):
     user_id = message.from_user.id
@@ -177,7 +176,6 @@ def handle_channel_attendance(call):
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
-    # منع العضو من الضغط مرتين والتلاعب بالعداد
     cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
     if cursor.fetchone():
         bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً!", show_alert=True)
@@ -195,13 +193,11 @@ def handle_channel_attendance(call):
     owner_id, count, title = poll
     new_count = count + 1
     
-    # تحديث العداد وتسجيل هوية المصوت
     cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
     cursor.execute("INSERT INTO poll_votes (poll_id, user_id) VALUES (?, ?)", (poll_id, user.id))
     conn.commit()
     conn.close()
     
-    # إرسال التفاصيل لصاحب الرابط في الخاص
     username_text = f"@{user.username}" if user.username else "لا يوجد معرف"
     owner_notification = (
         f"📥 **تسجيل حضور جديد!**\n\n"
@@ -210,11 +206,10 @@ def handle_channel_attendance(call):
         f"🔗 **المعرف:** {username_text}"
     )
     try:
-        bot.send_message(owner_id, owner_notification, parse_mode="Markdown")
+        bot.send_message(owner_id, owner_notification)
     except Exception:
         pass 
         
-    # تحديث العداد في القناة أمام الجميع
     try:
         new_keyboard = types.InlineKeyboardMarkup()
         new_keyboard.add(types.InlineKeyboardButton(f"تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}"))
