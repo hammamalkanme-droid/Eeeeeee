@@ -3,7 +3,10 @@ import telebot
 from telebot import types
 import sqlite3
 import os
-from flask import Flask, request
+import time
+import io
+import csv
+from flask import Flask, request, send_file
 
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
 WEBHOOK_URL = f"https://eeeeeee-production.up.railway.app/{TOKEN}"
@@ -15,11 +18,12 @@ app = Flask(__name__)
 def init_db():
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, title TEXT, custom_message TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS polls (poll_id TEXT PRIMARY KEY, owner_id INTEGER, count INTEGER, title TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS poll_votes (poll_id TEXT, user_id INTEGER, PRIMARY KEY (poll_id, user_id))')
+    cursor.execute('CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, title TEXT, custom_message TEXT, duration INTEGER DEFAULT 0)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS polls (poll_id TEXT PRIMARY KEY, owner_id INTEGER, count INTEGER, title TEXT, end_time REAL DEFAULT 0, is_closed INTEGER DEFAULT 0)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS poll_votes (poll_id TEXT, user_id INTEGER, user_name TEXT, username TEXT, PRIMARY KEY (poll_id, user_id))')
     cursor.execute('CREATE TABLE IF NOT EXISTS referrals (owner_id INTEGER PRIMARY KEY, visits_count INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS user_referral_logs (owner_id INTEGER, visitor_id INTEGER, PRIMARY KEY (owner_id, visitor_id))')
+    cursor.execute('CREATE TABLE IF NOT EXISTS user_points (user_id INTEGER PRIMARY KEY, points INTEGER DEFAULT 0)')
     conn.commit()
     conn.close()
 
@@ -35,7 +39,7 @@ def create_colored_btn(text, callback_data=None, switch_query=None, style="prima
     btn.style = style  # الألوان المتاحة: primary (بنفسجي), success (أخضر), danger (أحمر)
     return btn
 
-# لوحة القائمة الرئيسية الملونة (Inline Keyboard)
+# لوحة القائمة الرئيسية الملونة (Inline Keyboard) مع خيارات الإدارة الشاملة
 def get_main_inline_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     
@@ -50,8 +54,9 @@ def get_main_inline_keyboard(user_id):
     markup.add(btn_stats, btn_top)
     
     # صف الأزرار الثالث (أخضر أو بنفسجي)
+    btn_points = create_colored_btn("🌟 لوحة النقاط", callback_data="menu_points", style="success")
     btn_support = create_colored_btn("🛠️ الدعم والمساعدة", callback_data="menu_support", style="success")
-    markup.add(btn_support)
+    markup.add(btn_points, btn_support)
     
     # لوحة تحكم المشرف تظهر للمشرف فقط باللون الأحمر (danger)
     if user_id == ADMIN_ID:
@@ -85,13 +90,17 @@ def send_welcome(message):
     cursor.execute("SELECT visits_count FROM referrals WHERE owner_id = ?", (user_id,))
     res = cursor.fetchone()
     total_visits = res[0] if res else 0
+    cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+    p_res = cursor.fetchone()
+    user_points = p_res[0] if p_res else 0
     conn.close()
 
     welcome_text = (
         f"✨ **مرحباً بك عزيزي {message.from_user.first_name}**\n\n"
-        f"> 📌 *هنا يمكنك إنشاء بوستات الحضور بكل احترافية، متابعة التفاعلات، وجلب الزوار عبر رابطك الخاص.*\n\n"
+        f"> 📌 *هنا يمكنك إنشاء بوستات الحضور بكل احترافية، متابعة التفاعلات، ونظام النقاط وجلب الزوار عبر رابطك الخاص.*\n\n"
         f"🔗 **رابط دعوتك الشخصي:**\n`https://t.me/{bot.get_me().username}?start={user_id}`\n\n"
-        f"📊 **إجمالي زوار رابطك:** `{total_visits}` شخص\n\n"
+        f"📊 **إجمالي زوار رابطك:** `{total_visits}` شخص\n"
+        f"🌟 **رصيدك من النقاط:** `{user_points}` نقطة\n\n"
         f"👇 **اختر ما تحتاجه من الأزرار الملونة أدناه:**"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown", reply_markup=markup)
@@ -103,9 +112,11 @@ def handle_menu_callbacks(call):
     action = call.data.replace("menu_", "")
     
     if action == "settings":
-        user_states[user_id] = "waiting_title"
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(create_colored_btn("📝 تعديل كليشة / عنوان البوست", callback_data="set_title", style="primary"))
+        markup.add(create_colored_btn("⏱️ تحديد وقت انتهاء البوست التلقائي", callback_data="set_duration", style="primary"))
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "📝 *أرسل الآن عنوان أو كليشة البوست التي ستظهر للمستخدمين عند تسجيل الحضور:*", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "⚙️ **إعدادات البوست الخاصة بك:**\n\n> *اختر ما تريد تعديله من الخيارات أدناه:*", parse_mode="Markdown", reply_markup=markup)
     
     elif action == "share":
         bot.answer_callback_query(call.id)
@@ -117,21 +128,35 @@ def handle_menu_callbacks(call):
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
         cursor = conn.cursor()
+        cursor.execute("SELECT poll_id, title, count FROM polls WHERE owner_id = ?", (user_id,))
+        user_polls = cursor.fetchall()
         cursor.execute("SELECT COUNT(*), SUM(count) FROM polls WHERE owner_id = ?", (user_id,))
         polls_count, total_votes = cursor.fetchone()
         cursor.execute("SELECT visits_count FROM referrals WHERE owner_id = ?", (user_id,))
         ref_res = cursor.fetchone()
         total_visits = ref_res[0] if ref_res else 0
         conn.close()
+        
         polls_count = polls_count if polls_count else 0
         total_votes = total_votes if total_votes else 0
+        
         stats_text = (
             f"📊 **إحصائيات حسابك الشاملة:**\n\n"
             f"> • **عدد البوستات المنشأة:** `{polls_count}`\n"
             f"> • **إجمالي الحضور المسجلين:** `{total_votes}`\n"
-            f"> • **زوار رابط الدعوة الخاص بك:** `{total_visits}`"
+            f"> • **زوار رابط الدعوة الخاص بك:** `{total_visits}`\n\n"
+            f"📥 **تحميل كشوفات الحضور (Excel / CSV):**"
         )
-        bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown")
+        
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        if user_polls:
+            for pid, title, cnt in user_polls:
+                short_title = title[:20] + "..." if len(title) > 20 else title
+                markup.add(create_colored_btn(f"📄 تحميل كشف: {short_title} ({cnt})", callback_data=f"export_{pid}", style="success"))
+        else:
+            markup.add(create_colored_btn("⚠️ لا توجد بوستات نشطة حالياً", callback_data="none", style="danger"))
+            
+        bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown", reply_markup=markup)
     
     elif action == "leaderboard":
         bot.answer_callback_query(call.id)
@@ -139,16 +164,46 @@ def handle_menu_callbacks(call):
         cursor = conn.cursor()
         cursor.execute("SELECT owner_id, visits_count FROM referrals ORDER BY visits_count DESC LIMIT 5")
         top_users = cursor.fetchall()
+        cursor.execute("SELECT user_id, points FROM user_points ORDER BY points DESC LIMIT 5")
+        top_points = cursor.fetchall()
         conn.close()
-        leaderboard_text = "🏆 **قائمة أكثر المستخدمين جلباً للزوار:**\n\n"
+        
+        leaderboard_text = "🏆 **قوائم المتصدرين في البوت:**\n\n"
+        leaderboard_text += "🔗 **أكثر المستخدمين جلباً للزوار:**\n"
         if not top_users:
-            leaderboard_text += "> *لا توجد بيانات متصدرين حتى الآن.. كن الأول!*"
+            leaderboard_text += "> *لا توجد بيانات حتى الآن..*\n\n"
         else:
             medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
             for i, (uid, count) in enumerate(top_users):
                 medal = medals[i] if i < len(medals) else "🔹"
                 leaderboard_text += f"> {medal} أيدي: `{uid}` — **{count}** زائر\n"
+            leaderboard_text += "\n"
+            
+        leaderboard_text += "🌟 **أكثر الأعضاء تفاعلاً ونقاطاً:**\n"
+        if not top_points:
+            leaderboard_text += "> *لا توجد نقاط مسجلة حتى الآن..*"
+        else:
+            for i, (uid, pts) in enumerate(top_points):
+                medal = medals[i] if i < len(medals) else "🔹"
+                leaderboard_text += f"> {medal} أيدي: `{uid}` — **{pts}** نقطة\n"
+                
         bot.send_message(call.message.chat.id, leaderboard_text, parse_mode="Markdown")
+        
+    elif action == "points":
+        bot.answer_callback_query(call.id)
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+        res = cursor.fetchone()
+        pts = res[0] if res else 0
+        conn.close()
+        points_msg = (
+            f"🌟 **نظام النقاط والمكافآت:**\n\n"
+            f"> • رصيدك الحالي هو: **{pts} نقطة**\n"
+            f"> • تحصل على النقاط تلقائياً كلما قمت بتسجيل حضورك في بوستات الحضور الفعالة داخل القنوات والمجموعات!\n"
+            f"> • استمر بالتفاعل لتتصدر قائمة النشطاء الأسبوعية."
+        )
+        bot.send_message(call.message.chat.id, points_msg, parse_mode="Markdown")
     
     elif action == "support":
         bot.answer_callback_query(call.id)
@@ -167,13 +222,120 @@ def handle_menu_callbacks(call):
         cursor.execute("SELECT COUNT(*) FROM polls")
         total_polls = cursor.fetchone()[0]
         conn.close()
+        
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
+        
         admin_panel = (
             f"👑 **لوحة تحكم المشرف العامة:**\n\n"
             f"> • **إجمالي المستخدمين المسجلين:** `{total_users}`\n"
             f"> • **إجمالي بوستات الحضور:** `{total_polls}`\n"
             f"> • **حالة السيرفر:** `يعمل بكفاءة عالية 🟢`"
         )
-        bot.send_message(call.message.chat.id, admin_panel, parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, admin_panel, parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_title")
+def callback_set_title(call):
+    user_states[call.from_user.id] = "waiting_title"
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "📝 *أرسل الآن عنوان أو كليشة البوست الجديدة التي ستظهر للمستخدمين عند تسجيل الحضور:*", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == "set_duration")
+def callback_set_duration(call):
+    user_states[call.from_user.id] = "waiting_duration"
+    bot.answer_callback_query(call.id)
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    markup.add(
+        create_colored_btn("10 دقائق", callback_data="dur_10", style="primary"),
+        create_colored_btn("30 دقيقة", callback_data="dur_30", style="primary"),
+        create_colored_btn("ساعة واحدة", callback_data="dur_60", style="primary")
+    )
+    markup.add(
+        create_colored_btn("ساعتين", callback_data="dur_120", style="primary"),
+        create_colored_btn("بدون وقت إغلاق", callback_data="dur_0", style="success")
+    )
+    bot.send_message(call.message.chat.id, "⏱️ *اختر المدة الزمنية المحددة لصلاحية البوست بعد نشره:*", parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("dur_"))
+def handle_duration_selection(call):
+    user_id = call.from_user.id
+    duration = int(call.data.replace("dur_", ""))
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE user_settings SET duration = ? WHERE user_id = ?", (duration, user_id))
+    conn.commit()
+    conn.close()
+    bot.answer_callback_query(call.id, "✅ تم حفظ مدة البوست بنجاح!")
+    dur_text = f"{duration} دقيقة" if duration > 0 else "بدون وقت إغلاق تلقائي"
+    bot.send_message(call.message.chat.id, f"⏱️ *تم تحديث مدة انتهاء البوست لتصبح:* `{dur_text}`", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("export_"))
+def export_attendance_csv(call):
+    poll_id = call.data.replace("export_", "")
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT title FROM polls WHERE poll_id = ? AND owner_id = ?", (poll_id, call.from_user.id))
+    poll = cursor.fetchone()
+    if not poll:
+        bot.answer_callback_query(call.id, "❌ البوست غير موجود أو ليس لك صلاحية الوصول إليه.", show_alert=True)
+        conn.close()
+        return
+    title = poll[0]
+    cursor.execute("SELECT user_id, user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,))
+    votes = cursor.fetchall()
+    conn.close()
+    
+    # إنشاء ملف CSV في الذاكرة
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['User ID', 'Full Name', 'Username'])
+    for uid, name, uname in votes:
+        writer.writerow([uid, name, uname])
+    output.seek(0)
+    
+    bytes_io = io.BytesIO(output.getvalue().encode('utf-8-sig'))
+    bytes_io.name = f"attendance_{poll_id}.csv"
+    
+    bot.answer_callback_query(call.id)
+    bot.send_document(call.message.chat.id, bytes_io, caption=f"📄 **كشف الحضور لبوست:**\n`{title}`", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def admin_broadcast_prompt(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
+        return
+    user_states[ADMIN_ID] = "waiting_broadcast_msg"
+    bot.answer_callback_query(call.id)
+    bot.send_message(ADMIN_ID, "📢 *أرسل الآن نص الرسالة الجماعية (Broadcast) التي تريد تعميمها لجميع المستخدمين:*", parse_mode="Markdown")
+
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_broadcast_msg")
+def execute_broadcast(message):
+    user_states.pop(ADMIN_ID, None)
+    broadcast_text = message.text
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM user_settings")
+    users = cursor.fetchall()
+    conn.close()
+    
+    success_count = 0
+    fail_count = 0
+    
+    status_msg = bot.reply_to(message, "🚀 *جاري بدء إرسال الرسالة الجماعية لجميع المستخدمين.. انتظر قليلاً.*", parse_mode="Markdown")
+    
+    for (uid,) in users:
+        try:
+            bot.send_message(uid, f"📢 **تنبيه هام من الإدارة:**\n\n> {broadcast_text}", parse_mode="Markdown")
+            success_count += 1
+        except Exception:
+            fail_count + 1
+            
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=status_msg.message_id,
+        text=f"✅ **تم الانتهاء من الإرسال الجماعي بنجاح!**\n\n> • **تم الإرسال بنجاح إلى:** `{success_count}` مستخدم\n> • **فشل الإرسال إلى:** `{fail_count}` مستخدم",
+        parse_mode="Markdown"
+    )
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_support_msg")
 def forward_support_message(message):
@@ -220,7 +382,8 @@ def save_title(message):
     title = message.text
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO user_settings (user_id, title, custom_message) VALUES (?, ?, ?)", (user_id, title, "تم تسجيل حضورك بنجاح"))
+    cursor.execute("INSERT OR IGNORE INTO user_settings (user_id, title, custom_message, duration) VALUES (?, ?, ?, ?)", (user_id, "📌 سجل الحضور اليومي", "تم تسجيل حضورك بنجاح", 0))
+    cursor.execute("UPDATE user_settings SET title = ? WHERE user_id = ?", (title, user_id))
     conn.commit()
     conn.close()
     user_states.pop(user_id, None)
@@ -233,19 +396,27 @@ def inline_query(query):
     user_id = query.from_user.id
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT title FROM user_settings WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT title, duration FROM user_settings WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    title = row[0] if row else "📌 سجل الحضور اليومي"
+    
+    title = row[0] if row and row[0] else "📌 سجل الحضور اليومي"
+    duration = row[1] if row and row[1] is not None else 0
+    
     poll_id = f"poll_{user_id}_{query.id}"
+    current_time = time.time()
+    end_time = (current_time + (duration * 60)) if duration > 0 else 0
+    
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title) VALUES (?, ?, ?, ?)", (poll_id, user_id, 0, title))
+    cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title, end_time, is_closed) VALUES (?, ?, ?, ?, ?, ?)", (poll_id, user_id, 0, title, end_time, 0))
     conn.commit()
     conn.close()
     
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(create_colored_btn("✅ تسجيل الحضور [0]", callback_data=f"attend_{poll_id}", style="success"))
+    
+    time_note = f"\n> ⏱️ *ينتهي هذا البوست تلقائياً بعد {duration} دقيقة.*" if duration > 0 else ""
     
     articles = [
         types.InlineQueryResultArticle(
@@ -253,7 +424,7 @@ def inline_query(query):
             title="إنشاء بوست تسجيل الحضور",
             description=title,
             input_message_content=types.InputTextMessageContent(
-                message_text=f"📢 **{title}**\n\n> *اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:*",
+                message_text=f"📢 **{title}**\n\n> *اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:*{time_note}",
                 parse_mode="Markdown"
             ),
             reply_markup=keyboard
@@ -265,44 +436,61 @@ def inline_query(query):
 def handle_channel_attendance(call):
     poll_id = call.data.replace("attend_", "")
     user = call.from_user
+    current_time = time.time()
+    
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
-    if cursor.fetchone():
-        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً!", show_alert=True)
-        conn.close()
-        return
-    cursor.execute("SELECT owner_id, count, title FROM polls WHERE poll_id = ?", (poll_id,))
+    
+    cursor.execute("SELECT owner_id, count, title, end_time, is_closed FROM polls WHERE poll_id = ?", (poll_id,))
     poll = cursor.fetchone()
     if not poll:
         bot.answer_callback_query(call.id, "❌ انتهت صلاحية هذا البوست.", show_alert=True)
         conn.close()
         return
-    owner_id, count, title = poll
+        
+    owner_id, count, title, end_time, is_closed = poll
+    
+    if is_closed == 1 or (end_time > 0 and current_time > end_time):
+        bot.answer_callback_query(call.id, "⌛ عذراً، انتهى وقت تسجيل الحضور لهذا البوست!", show_alert=True)
+        conn.close()
+        return
+        
+    cursor.execute("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?", (poll_id, user.id))
+    if cursor.fetchone():
+        bot.answer_callback_query(call.id, "⚠️ لقد قمت بتسجيل حضورك مسبقاً!", show_alert=True)
+        conn.close()
+        return
+        
     new_count = count + 1
+    uname_str = f"@{user.username}" if user.username else "لا يوجد"
     cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
-    cursor.execute("INSERT INTO poll_votes (poll_id, user_id) VALUES (?, ?)", (poll_id, user.id))
+    cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username) VALUES (?, ?, ?, ?)", (poll_id, user.id, user.first_name, uname_str))
+    
+    # منح نقاط تفاعلية للمستخدم الذي سجل حضوره
+    cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, 5) ON CONFLICT(user_id) DO UPDATE SET points = points + 5", (user.id,))
+    
     conn.commit()
     conn.close()
     
-    username_text = f"@{user.username}" if user.username else "لا يوجد معرف"
     owner_notification = (
         f"🔔 **تسجيل حضور جديد في بوستك!**\n\n"
         f"> • **البوست:** {title}\n"
         f"> • **المسجل:** {user.first_name}\n"
-        f"> • **المعرف:** `{username_text}`"
+        f"> • **المعرف:** `{uname_str}`"
     )
     try:
         bot.send_message(owner_id, owner_notification, parse_mode="Markdown")
     except Exception:
         pass 
+        
     try:
         new_keyboard = types.InlineKeyboardMarkup()
         new_keyboard.add(create_colored_btn(f"✅ تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}", style="success"))
         bot.edit_message_reply_markup(inline_message_id=call.inline_message_id, reply_markup=new_keyboard)
     except Exception:
         pass
-    bot.answer_callback_query(call.id, "✨ تم تسجيل حضورك بنجاح!", show_alert=True)
+        
+    bot.answer_callback_query(call.id, "✨ تم تسجيل حضورك بنجاح وحصلت على 5 نقاط!", show_alert=True)
 
 @app.route('/' + TOKEN, methods=['POST'])
 def webhook_listener():
