@@ -41,26 +41,78 @@ user_states = {}
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    btn_create = types.InlineKeyboardButton("⚙️ إعداد كليشة الحضور", callback_data="config_menu")
-    btn_share = types.InlineKeyboardButton("🔗 انشر البوست في قناتك", switch_inline_query="create")
-    markup.add(btn_create, btn_share)
+    user_id = message.from_user.id
     
+    # 1. تصميم كيبورد سفلي فخم (نفس طريقة الصورة)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn_config = types.KeyboardButton("⚙️ إعدادات البوست")
+    btn_share = types.KeyboardButton("🔗 مشاركة وتفعيل ⚡️")
+    btn_stats = types.KeyboardButton("📊 إحصائيات الحضور 💎")
+    btn_leaderboard = types.KeyboardButton("👑 قائمة المتصدرين")
+    btn_help = types.KeyboardButton("📞 الدعم والمساعدة")
+    
+    # ترتيب الأزرار هندسياً
+    markup.add(btn_config, btn_share)
+    markup.add(btn_stats)
+    markup.add(btn_leaderboard, btn_help)
+    
+    # حساب إجمالي عدد الزوار/النقاط لهذا المستخدم من قاعدة البيانات
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(count) FROM polls WHERE owner_id = ?", (user_id,))
+    res = cursor.fetchone()
+    total_visits = res[0] if res and res[0] else 0
+    conn.close()
+    
+    # 2. تنسيق النص باحترافية عالية (HTML Blockquotes)
     welcome_text = (
-        f"أهلاً بك يا {message.from_user.first_name} في بوت الحضور الاحترافي.\n\n"
-        "• قم بإعداد رسالتك.\n"
-        "• انشرها في قناتك أو مجموعتك.\n"
-        "• أي شخص يضغط تسجيل، بيوصلك إشعار خاص باسمه ومعرفه!\n"
-        "• يتحدث عداد الحضور تلقائياً أمام الجميع."
+        f"<b>أهلاً بك - {message.from_user.first_name}.</b> 🤖\n\n"
+        "<blockquote>هنا تقدر تصنع بوستات حضور، تدير مسابقاتك، وتستقبل التفاعلات بكل احترافية وأمان..</blockquote>\n\n"
+        "<b>رابطك الخاص للنشر:</b>\n"
+        f"<code>https://t.me/{bot.get_me().username}?start={user_id}</code>\n\n"
+        f"📊 <b>عدد زوار بوستاتك:</b> {total_visits}\n\n"
+        "<b>شرح استخدام البوت &lt;&gt; صنع بوست | متابعة</b>\n"
+        "<blockquote>✨ نتمنى لك تجربة ممتعة وقوية داخل النظام</blockquote>"
     )
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+    
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="HTML")
 
-@bot.callback_query_handler(func=lambda call: call.data == "config_menu")
-def config_menu(call):
-    user_id = call.from_user.id
-    user_states[user_id] = "waiting_title"
-    bot.send_message(call.message.chat.id, "📝 **أرسل الآن عنوان أو كليشة البوست** التي ستظهر أعلى زر الحضور:")
+# --- استجابة للأزرار السفلية الفخمة ---
+@bot.message_handler(func=lambda message: message.text in ["⚙️ إعدادات البوست", "🔗 مشاركة وتفعيل ⚡️", "📊 إحصائيات الحضور 💎", "👑 قائمة المتصدرين", "📞 الدعم والمساعدة"])
+def handle_menu_buttons(message):
+    user_id = message.from_user.id
+    
+    if message.text == "⚙️ إعدادات البوست":
+        user_states[user_id] = "waiting_title"
+        bot.reply_to(message, "📝 **أرسل الآن عنوان أو كليشة البوست** التي ستظهر أعلى زر الحضور:", parse_mode="Markdown")
+        
+    elif message.text == "🔗 مشاركة وتفعيل ⚡️":
+        inline_markup = types.InlineKeyboardMarkup()
+        btn_share = types.InlineKeyboardButton("🚀 انشر البوست الآن", switch_inline_query="create")
+        inline_markup.add(btn_share)
+        bot.reply_to(message, "اضغط على الزر أدناه لاختيار القناة أو المجموعة التي تريد نشر بوست الحضور فيها:", reply_markup=inline_markup)
+        
+    elif message.text == "📊 إحصائيات الحضور 💎":
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*), SUM(count) FROM polls WHERE owner_id = ?", (user_id,))
+        polls_count, total_votes = cursor.fetchone()
+        conn.close()
+        
+        polls_count = polls_count if polls_count else 0
+        total_votes = total_votes if total_votes else 0
+        
+        stats_text = (
+            f"📊 **إحصائيات بوستاتك الحالية:**\n\n"
+            f"📦 عدد البوستات التي أنشأتها: `{polls_count}`\n"
+            f"👥 إجمالي الحضور المسجلين: `{total_votes}`"
+        )
+        bot.reply_to(message, stats_text, parse_mode="Markdown")
+        
+    else:
+        bot.reply_to(message, "🛠 **هذه الميزة قيد التطوير وسيتم إضافتها في التحديث القادم!**", parse_mode="Markdown")
 
+# استقبال الكليشة وإفظها
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_title")
 def save_title(message):
     user_id = message.from_user.id
@@ -149,7 +201,7 @@ def handle_channel_attendance(call):
     conn.commit()
     conn.close()
     
-    # إرسال التفاصيل لصاحب الرابط
+    # إرسال التفاصيل لصاحب الرابط في الخاص
     username_text = f"@{user.username}" if user.username else "لا يوجد معرف"
     owner_notification = (
         f"📥 **تسجيل حضور جديد!**\n\n"
@@ -158,7 +210,7 @@ def handle_channel_attendance(call):
         f"🔗 **المعرف:** {username_text}"
     )
     try:
-        bot.send_message(owner_id, owner_notification)
+        bot.send_message(owner_id, owner_notification, parse_mode="Markdown")
     except Exception:
         pass 
         
@@ -175,5 +227,5 @@ def handle_channel_attendance(call):
         
     bot.answer_callback_query(call.id, "✅ تم تسجيل حضورك وإرسال بياناتك بنجاح!", show_alert=True)
 
-print("البوت يعمل الآن بصيغة الـ Inline...")
+print("البوت الاحترافي يعمل الآن بكامل المزايا...")
 bot.infinity_polling()
