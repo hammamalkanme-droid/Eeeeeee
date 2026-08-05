@@ -482,8 +482,7 @@ def send_welcome(message):
 
   markup = get_main_inline_keyboard(user_id)
   welcome_text = (
-      f"✨<b>حياك الله أخي {first_name}</b>\n\n..."
-<blockquote>📌"
+      f"✨ <b>حيّاك الله أخي/أختي</b>\n\n<blockquote>📌"
       " <i>أنشئ بوستات الحضور والأسئلة التفاعلية بكل احترافية، مع تحليلات ذكية"
       " ونظام الأوسمة وتحديات السرعة المتقدمة.</i></blockquote>\n\n🏅 <b>وسامك"
       f" الحالي:</b> {badge_icon} <b>{badge_name}</b>\n\n⚠️ <b>تنبيه هام"
