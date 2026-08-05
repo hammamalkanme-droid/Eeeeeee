@@ -11,9 +11,10 @@ import threading
 from datetime import datetime, timedelta
 from flask import Flask, request
 
-TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
+TOKEN = "7986003994:AAHKfkigM7d07MARwaNpAicXQbcXEY1ugWU"
 WEBHOOK_URL = f"https://eeeeeee-production.up.railway.app/{TOKEN}"
 ADMIN_ID = 1250493517
+BOT_URL = "https://t.me/DaftarHQBot"
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
@@ -220,7 +221,7 @@ def check_forced_subscription(user_id):
             return True
     except Exception as e:
         print(f"Subscription check error: {e}")
-        return True # للسماح بالعمل في حال وجود خطأ بالصلاحيات أو المعرف
+        return True
     return False
 
 def send_subscription_required_message(chat_id):
@@ -334,7 +335,6 @@ def callback_check_subscription(call):
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        # عرض القائمة الرئيسية مباشرة
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
@@ -381,9 +381,7 @@ def process_restore_file(message):
         with open('roulette_bot.db', 'wb') as f:
             f.write(downloaded_file)
         
-        # إعادة تهيئة الجداول فوراً لمنع توقف البوت في حال كانت النسخة القديمة تفتقر لجداول أو أعمدة جديدة
         init_db()
-        
         bot.reply_to(message, "✅ <b>تم استعادة قاعدة البيانات (Restore) وتحديث الهيكلية بنجاح وبدء العمل بالنسخة الجديدة!</b>", parse_mode="HTML")
     except Exception as e:
         bot.reply_to(message, f"❌ <b>فشل استعادة قاعدة البيانات:</b> <code>{e}</code>", parse_mode="HTML")
@@ -759,12 +757,15 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
     
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(create_colored_btn("✅ تسجيل الحضور [0]", callback_data=f"attend_{poll_id}", style="success"))
+    keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
     
     time_note = f"\n<i>⏱️ ينتهي هذا البوست تلقائياً بعد {duration} دقيقة.</i>" if duration > 0 else "\n<i>⏱️ البوست مفتوح طوال الوقت لتسجيل الحضور.</i>"
     
     msg_content = f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:</i>{time_note}"
     if show_in_channel == 1:
         msg_content += "\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين (0):</b>\nلا توجد تسجيلات حتى الآن.</blockquote>"
+
+    msg_content += f"\n\n<b><a href=\"{BOT_URL}\">🤖 بوت دفتر الحضور</a></b>"
 
     try:
         sent_msg = bot.send_message(real_channel_id, msg_content, parse_mode="HTML", reply_markup=keyboard)
@@ -932,6 +933,7 @@ def q_step_publish(message):
         create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
         create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary")
     )
+    keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
     
     q_msg_content = (
         f"💡 <b>سؤال تفاعلي مع (تحدي السرعة):</b>\n\n"
@@ -942,7 +944,8 @@ def q_step_publish(message):
         f"🔹 د) {html.escape(od)}\n\n"
         f"🏁 <b>لوحة شرف تحدي السرعة (أسرع 3 أجابوا صح):</b>\n"
         f"<blockquote>1. في انتظار الأسرع...\n2. في انتظار الأسرع...\n3. في انتظار الأسرع...</blockquote>\n\n"
-        f"<i>⏱️ اختر الإجابة الصحيحة الآن لتكون في لوحة الشرف!</i>"
+        f"<i>⏱️ اختر الإجابة الصحيحة الآن لتكون في لوحة الشرف!</i>\n\n"
+        f"<b><a href=\"{BOT_URL}\">🤖 بوت دفتر الحضور</a></b>"
     )
     
     try:
@@ -1051,7 +1054,8 @@ def handle_question_answer(call):
             f"🔹 د) {html.escape(od)}\n\n"
             f"🏁 <b>لوحة شرف تحدي السرعة (أسرع 3 أجابوا صح):</b>\n"
             f"<blockquote>1. {html.escape(str(r1))}\n2. {html.escape(str(r2))}\n3. {html.escape(str(r3))}</blockquote>\n\n"
-            f"<i>⏱️ اختر الإجابة الصحيحة الآن لتكون في لوحة الشرف!</i>"
+            f"<i>⏱️ اختر الإجابة الصحيحة الآن لتكون في لوحة الشرف!</i>\n\n"
+            f"<b><a href=\"{BOT_URL}\">🤖 بوت دفتر الحضور</a></b>"
         )
         keyboard = types.InlineKeyboardMarkup(row_width=2)
         keyboard.add(
@@ -1060,6 +1064,7 @@ def handle_question_answer(call):
             create_colored_btn(f"ج) {oc}", callback_data=f"ans_{question_id}_C", style="primary"),
             create_colored_btn(f"د) {od}", callback_data=f"ans_{question_id}_D", style="primary")
         )
+        keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
         bot.edit_message_text(chat_id=channel_id, message_id=message_id, text=updated_q_content, parse_mode="HTML", reply_markup=keyboard)
     except Exception as e:
         print(f"Error updating speed race message: {e}")
@@ -1370,7 +1375,6 @@ def execute_broadcast(message):
     broadcast_text = message.text
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    # تم التصحيح هنا ليأخذ جميع المستخدمين المسجلين في البوت عبر user_profiles بدلاً من user_settings
     cursor.execute("SELECT user_id FROM user_profiles")
     users = cursor.fetchall()
     conn.close()
@@ -1494,6 +1498,7 @@ def handle_channel_attendance(call):
     try:
         new_keyboard = types.InlineKeyboardMarkup()
         new_keyboard.add(create_colored_btn(f"✅ تسجيل الحضور [{new_count}]", callback_data=f"attend_{poll_id}", style="success"))
+        new_keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
         voters_list_str = ""
         if show_in_channel == 1:
             if all_voters:
@@ -1505,6 +1510,8 @@ def handle_channel_attendance(call):
         updated_text = f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:</i>"
         if show_in_channel == 1:
             updated_text += f"\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين ({new_count}):</b>\n{voters_list_str}</blockquote>"
+
+        updated_text += f"\n\n<b><a href=\"{BOT_URL}\">🤖 بوت دفتر الحضور</a></b>"
 
         bot.edit_message_text(
             chat_id=channel_id,
@@ -1539,7 +1546,13 @@ def background_scheduler_loop():
                     poll_id = f"poll_sched_{user_id}_{int(time.time())}"
                     keyboard = types.InlineKeyboardMarkup()
                     keyboard.add(create_colored_btn("✅ تسجيل الحضور [0]", callback_data=f"attend_{poll_id}", style="success"))
-                    msg_content = f"<b>📢 {html.escape(title)}</b>\n\n<i>(بوست مجدول تلقائياً) - اضغط على الزر أدناه لتسجيل حضورك:</i>"
+                    keyboard.add(create_colored_btn("🤖 الانتقال للبوت", url=BOT_URL, style="primary"))
+                    
+                    msg_content = (
+                        f"<b>📢 {html.escape(title)}</b>\n\n"
+                        f"<i>(بوست مجدول تلقائياً) - اضغط على الزر أدناه لتسجيل حضورك:</i>\n\n"
+                        f"<b><a href=\"{BOT_URL}\">🤖 بوت دفتر الحضور</a></b>"
+                    )
                     
                     sent_msg = bot.send_message(channel_id, msg_content, parse_mode="HTML", reply_markup=keyboard)
                     cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
