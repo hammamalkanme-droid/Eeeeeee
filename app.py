@@ -90,6 +90,67 @@ def add_new_task_direct(message):
             bot.reply_to(message, f"✅ تم تسجيل المهمة بنجاح لصالح ({assignee}) وتم إدراجها في المنظومة!")
         else:
             bot.reply_to(message, "❌ الخطأ في التنسيق. استخدم الأمر هكذا:\n`/new task | المشروع | المهمة | المسؤول`", parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ، تأكد من كتابة الأمر بالشكل الصحيح.")
+
+print("البوت المتكامل يعمل الآن...")
+bot.infinity_polling()
+        if not tasks_db:
+            bot.answer_callback_query(call.id, "لا توجد مهام حالياً")
+            bot.send_message(call.message.chat.id, "📋 **قائمة المهام:**\nلا توجد أي مهام مسجلة حتى الآن.")
+        else:
+            resp = "📋 **سجل مهام فريق النخبة الحالي:**\n\n"
+            for idx, t in enumerate(tasks_db, 1):
+                resp += f"{idx}. **المشروع:** {t['project']}\n   **المهمة:** {t['task']}\n   **المسؤول:** {t['assignee']}\n   **الحالة:** {t['status']}\n\n"
+            bot.send_message(call.message.chat.id, resp, parse_mode="Markdown")
+            
+    elif call.data == "add_task_info":
+        bot.send_message(call.message.chat.id, 
+                         "📌 **طريقة إضافة مهمة جديدة:**\n\n"
+                         "أرسل الرسالة بهذا الشكل المباشر:\n"
+                         "`/new task | اسم المشروع | تفاصيل المهمة | اسم المسؤول`\n\n"
+                         "مثال:\n`/new task | بوتات زيد | رفع ملخصات الفيزيا | سفيان`", 
+                         parse_mode="Markdown")
+                         
+    elif call.data == "show_team":
+        team_text = "👥 **فريق إدارة النخبة:**\n\n"
+        for name, role in team_members.items():
+            team_text += f"▪️ **{name}** -> *{role}*\n"
+        bot.send_message(call.message.chat.id, team_text, parse_mode="Markdown")
+        
+    elif call.data == "show_projects":
+        proj_text = (
+            "🌐 **مشاريع فريق النخبة النشطة:**\n\n"
+            "1️⃣ **بوتات زيد:** توزيع الملخصات والاختبارات الإلكترونية.\n"
+            "2️⃣ **مشروع فضاء:** تنظيم وتنسيق الجداول والفعاليات.\n"
+            "3️⃣ **مناهل العلم:** الأرشيف التعليمي للطلاب.\n"
+            "4️⃣ **الندوات واللقاءات:** مثل ويبينار سبيل الهمّة."
+        )
+        bot.send_message(call.message.chat.id, proj_text, parse_mode="Markdown")
+
+# 3. أمر إضافة مهمة سريعة
+@bot.message_handler(commands=['new'])
+def add_new_task_direct(message):
+    try:
+        content = message.text.replace('/new', '').strip()
+        if content.startswith('task'):
+            content = content.replace('task', '').strip()
+            
+        parts = content.split('|')
+        if len(parts) >= 3:
+            project = parts[0].strip()
+            task_desc = parts[1].strip()
+            assignee = parts[2].strip()
+            
+            tasks_db.append({
+                "project": project,
+                "task": task_desc,
+                "assignee": assignee,
+                "status": "قيد العمل ⏳"
+            })
+            bot.reply_to(message, f"✅ تم تسجيل المهمة بنجاح لصالح ({assignee}) وتم إدراجها في المنظومة!")
+        else:
+            bot.reply_to(message, "❌ الخطأ في التنسيق. استخدم الأمر هكذا:\n`/new task | المشروع | المهمة | المسؤول`", parse_mode="Markdown")
     except Exception:
 حدث خطأ، تأكد من كتابة الأمر بالشكل الصحيح.
 
