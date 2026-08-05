@@ -6,6 +6,7 @@ import os
 import time
 import io
 import csv
+import html
 from datetime import datetime
 from flask import Flask, request
 
@@ -289,14 +290,15 @@ def process_channel_posting(message):
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(create_colored_btn("✅ تسجيل الحضور [0]", callback_data=f"attend_{poll_id}", style="success"))
     
-    time_note = f"\n> ⏱️ *ينتهي هذا البوست تلقائياً بعد {duration} دقيقة.*" if duration > 0 else "\n> ⏱️ *البوست مفتوح طوال الوقت لتسجيل الحضور.*"
+    time_note = f"\n<i>⏱️ ينتهي هذا البوست تلقائياً بعد {duration} دقيقة.</i>" if duration > 0 else "\n<i>⏱️ البوست مفتوح طوال الوقت لتسجيل الحضور.</i>"
     
-    msg_content = f"📢 **{title}**\n\n> *اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:*{time_note}"
+    # استخدام تنسيق HTML لرسالة القناة لتمكين الاقتباس القابل للطي
+    msg_content = f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:</i>{time_note}"
     if show_in_channel == 1:
-        msg_content += "\n\n> 👥 **قائمة الحضور المسجلين (0):**\n> *لا توجد تسجيلات حتى الآن.*"
+        msg_content += "\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين (0):</b>\nلا توجد تسجيلات حتى الآن.</blockquote>"
 
     try:
-        sent_msg = bot.send_message(channel_input, msg_content, parse_mode="Markdown", reply_markup=keyboard)
+        sent_msg = bot.send_message(channel_input, msg_content, parse_mode="HTML", reply_markup=keyboard)
         
         cursor.execute("INSERT OR REPLACE INTO polls (poll_id, owner_id, count, title, end_time, is_closed, show_in_channel, channel_id, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
                        (poll_id, user_id, 0, title, end_time, 0, show_in_channel, str(sent_msg.chat.id), sent_msg.message_id))
@@ -525,7 +527,7 @@ def execute_broadcast(message):
     
     for (uid,) in users:
         try:
-            bot.send_message(uid, f"📢 **تنبيه هام من الإدارة:**\n\n> {broadcast_text}", parse_Mode="Markdown")
+            bot.send_message(uid, f"📢 **تنبيه هام من الإدارة:**\n\n> {broadcast_text}", parse_mode="Markdown")
             success_count += 1
         except Exception:
             fail_count += 1
@@ -645,18 +647,21 @@ def handle_channel_attendance(call):
         
         voters_list_str = ""
         if show_in_channel == 1:
-            voters_lines = [f"> {i+1}. {v[0]}" for i, v in enumerate(all_voters)]
-            voters_list_str = "\n" + "\n".join(voters_lines)
+            if all_voters:
+                voters_lines = [f"{i+1}. {html.escape(v[0])}" for i, v in enumerate(all_voters)]
+                voters_list_str = "\n".join(voters_lines)
+            else:
+                voters_list_str = "لا توجد تسجيلات حتى الآن."
 
-        updated_text = f"📢 **{title}**\n\n> *اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:*"
+        updated_text = f"<b>📢 {html.escape(title)}</b>\n\n<i>اضغط على الزر الملون أدناه لتسجيل حضورك الرسمي فوراً:</i>"
         if show_in_channel == 1:
-            updated_text += f"\n\n> 👥 **قائمة الحضور المسجلين ({new_count}):**{voters_list_str}"
+            updated_text += f"\n\n<blockquote expandable><b>👥 قائمة الحضور المسجلين ({new_count}):</b>\n{voters_list_str}</blockquote>"
 
         bot.edit_message_text(
             chat_id=channel_id,
             message_id=message_id,
             text=updated_text,
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=new_keyboard
         )
     except Exception as e:
