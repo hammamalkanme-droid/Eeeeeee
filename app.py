@@ -18,6 +18,14 @@ ADMIN_ID = 1250493517
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
+# تسجيل الويب هوك هنا مباشرة ليعمل مع سيرفر الإنتاج (Gunicorn) فور الإقلاع
+try:
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    print("Webhook set successfully!")
+except Exception as e:
+    print(f"Error setting webhook: {e}")
+
 def init_db():
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -123,7 +131,6 @@ def init_db():
                         PRIMARY KEY (question_id, user_id)
                     )''')
 
-    # الجداول الجديدة المضافة للأفكار المطورة (1، 2، 3، 4)
     cursor.execute('''CREATE TABLE IF NOT EXISTS user_badges (
                         user_id INTEGER PRIMARY KEY,
                         badge_name TEXT,
@@ -652,7 +659,6 @@ def publish_poll_to_channel(message_or_call_msg, user_id, channel_input):
         conn.close()
         bot.send_message(chat_id_to_send, f"❌ <b>فشل النشر في القناة:</b>\n\n<blockquote>تأكد أن البوت <b>مشرف</b> في القناة ولديه صلاحية إرسال الرسائل.\nالتفاصيل التقنية: <code>{e}</code></blockquote>", parse_mode="HTML")
 
-# --- (الفكرة الثانية): معالجة إدخال الجدولة الزمنية للبوستات ---
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_sched_input")
 def process_sched_title(message):
     user_id = message.from_user.id
@@ -718,7 +724,6 @@ def process_coupon_text_input(message):
     cursor.execute("UPDATE coupons SET uses_count = uses_count + 1 WHERE code = ?", (code,))
     cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?", (user_id, pts, pts))
     
-    # تحديث الوسام تلقائياً بعد كسب النقاط
     cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
     new_pts = cursor.fetchone()[0]
     b_name, b_icon = get_user_badge(new_pts)
@@ -828,7 +833,6 @@ def q_step_publish(message):
     except Exception as e:
         bot.reply_to(message, f"❌ <b>فشل نشر السؤال في القناة:</b>\n\n<blockquote>تأكد أن البوت مشرف ولديه صلاحيات الإرسال.\nالتفاصيل: <code>{e}</code></blockquote>", parse_mode="HTML")
 
-# --- (الفكرة الرابعة): معالجة إجابات الأسئلة مع تحدي السرعة اللحظي ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
 def handle_question_answer(call):
     raw_data = call.data[4:]
@@ -887,7 +891,6 @@ def handle_question_answer(call):
             
         cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET points = points + ?", (user.id, earned_points, earned_points))
         
-        # تحديث الأوسمة تلقائياً بعد النقاط
         cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user.id,))
         new_pts = cursor.fetchone()[0]
         b_name, b_icon = get_user_badge(new_pts)
@@ -899,13 +902,11 @@ def handle_question_answer(call):
     cursor.execute("INSERT INTO question_answers (question_id, user_id, selected_option, is_correct, earned_points) VALUES (?, ?, ?, ?, ?)",
                    (question_id, user.id, chosen_opt, is_correct, earned_points))
                    
-    # استرجاع ترتيب الشرف المحدث للسرعة
     cursor.execute("SELECT rank_pos, user_name FROM question_speed_race WHERE question_id = ? ORDER BY rank_pos ASC", (question_id,))
     speed_racers = cursor.fetchall()
     conn.commit()
     conn.close()
     
-    # تحديث رسالة السؤال في القناة بتحدي السرعة اللحظي
     try:
         racers_dict = {r[0]: r[1] for r in speed_racers}
         r1 = racers_dict.get(1, "في انتظار الأسرع...")
@@ -1161,7 +1162,6 @@ def admin_broadcast_prompt(call):
     bot.answer_callback_query(call.id)
     bot.send_message(ADMIN_ID, "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast):</i>", parse_mode="HTML")
 
-# --- (الفكرة الثالثة): معالجة إرسال التقرير الأسبوعي الفوري للمشرف ---
 @bot.callback_query_handler(func=lambda call: call.data == "admin_send_weekly_report")
 def send_weekly_report_manual(call):
     if call.from_user.id != ADMIN_ID:
@@ -1296,7 +1296,6 @@ def handle_channel_attendance(call):
     cursor.execute("INSERT INTO poll_votes (poll_id, user_id, user_name, username) VALUES (?, ?, ?, ?)", (poll_id, user.id, fixed_name, uname_str))
     cursor.execute("INSERT INTO user_points (user_id, points) VALUES (?, 5) ON CONFLICT(user_id) DO UPDATE SET points = points + 5", (user.id,))
     
-    # تحديث الأوسمة تلقائياً بعد إضافة نقاط الحضور
     cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user.id,))
     new_pts = cursor.fetchone()[0]
     b_name, b_icon = get_user_badge(new_pts)
@@ -1346,7 +1345,6 @@ def handle_channel_attendance(call):
         
     bot.answer_callback_query(call.id, f"✨ تم تسجيل حضورك بنجاح يا {fixed_name} وحصلت على 5 نقاط!\n🏅 الوسام: {b_icon} {b_name}", show_alert=True)
 
-# --- (مهام الخلفية التلقائية): فحص الجدولة والتقارير الأسبوعية كل دقيقة ---
 def background_scheduler_loop():
     while True:
         try:
@@ -1393,7 +1391,5 @@ def index():
     return "Bot is running perfectly with advanced analytics, badges, scheduling and speed races!", 200
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
