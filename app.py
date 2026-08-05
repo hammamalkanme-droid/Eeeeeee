@@ -356,27 +356,8 @@ def handle_menu_callbacks(call):
     
     elif action == "share":
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT channel_title, channel_id FROM saved_channels WHERE user_id = ?", (user_id,))
-        saved = cursor.fetchall()
-        conn.close()
+        show_channel_selection_menu(call.message.chat.id, user_id)
         
-        if saved:
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            for c_title, c_id in saved:
-                markup.add(create_colored_btn(f"📢 {c_title}", callback_data=f"select_chan_{c_id}", style="success"))
-            markup.add(create_colored_btn("➕ إضافة قناة جديدة", callback_data="add_new_channel_prompt", style="primary"))
-            bot.send_message(call.message.chat.id, "🚀 <b>اختر إحدى قنواتك المحفوظة أو أضف قناة جديدة للنشر:</b>\n\n<i>(ملاحظة: الحد الأقصى لبوستات الحضور هو بوستان فقط لكل قناة يومياً)</i>", parse_mode="HTML", reply_markup=markup)
-        else:
-            user_states[user_id] = "waiting_channel_username"
-            bot.send_message(
-                call.message.chat.id, 
-                "🚀 <b>نشر بوست الحضور مباشرة بواسطة البوت:</b>\n\n"
-                "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.\n(الحد الأقصى بوستان يومياً لكل قناة).</blockquote>", 
-                parse_mode="HTML"
-            )
-    
     elif action == "create_question":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
@@ -500,6 +481,28 @@ def handle_menu_callbacks(call):
             return
         bot.answer_callback_query(call.id)
         show_admin_panel(call.message.chat.id)
+
+def show_channel_selection_menu(chat_id, user_id):
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_title, channel_id FROM saved_channels WHERE user_id = ?", (user_id,))
+    saved = cursor.fetchall()
+    conn.close()
+    
+    if saved:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for c_title, c_id in saved:
+            markup.add(create_colored_btn(f"📢 {c_title}", callback_data=f"select_chan_{c_id}", style="success"))
+        markup.add(create_colored_btn("➕ إضافة قناة جديدة", callback_data="add_new_channel_prompt", style="primary"))
+        bot.send_message(chat_id, "🚀 <b>اختر إحدى قنواتك المحفوظة أو أضف قناة جديدة للنشر:</b>\n\n<i>(ملاحظة: الحد الأقصى لبوستات الحضور هو بوستان فقط لكل قناة يومياً)</i>", parse_mode="HTML", reply_markup=markup)
+    else:
+        user_states[user_id] = "waiting_channel_username"
+        bot.send_message(
+            chat_id, 
+            "🚀 <b>نشر بوست الحضور مباشرة بواسطة البوت:</b>\n\n"
+            "<blockquote>أرسل الآن معرف قناتك أو مجموعة (مثال: <code>@MyChannel</code> أو رابط الدعوة أو الأيدي الخاص بالقناة)، وتأكد أن البوت مشرف فيها.\n(الحد الأقصى بوستان يومياً لكل قناة).</blockquote>", 
+            parse_mode="HTML"
+        )
 
 @bot.callback_query_handler(func=lambda call: call.data == "add_new_channel_prompt")
 def add_new_channel_prompt(call):
@@ -783,7 +786,6 @@ def view_poll_detailed_stats(call):
     cursor.execute("SELECT user_name, username FROM poll_votes WHERE poll_id = ?", (poll_id,))
     votes = cursor.fetchall()
     
-    # حساب المستخدمين الفريدين (Unique Reach) وإجمالي التفاعلات لضبط قراءة الأرقام وتحليلها بدقة
     cursor.execute("SELECT COUNT(DISTINCT user_id) FROM poll_votes WHERE poll_id = ?", (poll_id,))
     unique_users_count = cursor.fetchone()[0] or 0
     
@@ -929,11 +931,10 @@ def handle_wizard_show_mode(call):
     cursor.execute("UPDATE user_settings SET show_in_channel = ? WHERE user_id = ?", (show_mode, user_id))
     conn.commit()
     conn.close()
-    bot.answer_callback_query(call.id, "✨ تم حفظ الإعدادات بنجاح!")
+    bot.answer_callback_query(call.id, "✨ تم حفظ الإعدادات بنجاح وانتقال للنشر!")
     
-    markup = types.InlineKeyboardMarkup()
-    markup.add(create_colored_btn("🚀 نشر البوست الآن في قناتك", callback_data="menu_share", style="success"))
-    bot.send_message(call.message.chat.id, "🎉 <b>أصبح بوست الحضور جاهزاً للنشر!</b>\n\n<blockquote>👇 اضغط الزر أدناه لبدء النشر المباشر بالقناة:</blockquote>", parse_mode="HTML", reply_markup=markup)
+    # [تصحيح المشكلة]: الانتقال التلقائي لاختيار القناة أو إدخال المعرف بعد انتهاء الإعدادات بدلاً من التوقف
+    show_channel_selection_menu(call.message.chat.id, user_id)
 
 @bot.message_handler(func=lambda message: message.from_user.id in user_states and user_states[message.from_user.id] == "waiting_manual_title")
 def save_manual_title(message):
