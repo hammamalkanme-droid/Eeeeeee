@@ -1,9 +1,11 @@
 import telebot
 from telebot import types
+from flask import Flask, request
 import sqlite3
 
 TOKEN = "8682109455:AAHPGbqvIDjQtulfek5S1ujR-53CzrSthKs"
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 # 🔧 تهيئة قاعدة البيانات
 def init_db():
@@ -37,26 +39,12 @@ def init_db():
 init_db()
 user_states = {}
 
-# 🎨 لوحة التحكم مع أزرار ملونة
+# 🎨 لوحة التحكم
 def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-
-    btn_settings = types.KeyboardButton("⚙️ إعدادات البوست", request_contact=False)
-    btn_share = types.KeyboardButton("🔗 مشاركة وتفعيل ⚡️")
-    btn_stats = types.KeyboardButton("📊 إحصائيات الحضور 💎")
-    btn_top = types.KeyboardButton("👑 قائمة المتصدرين")
-    btn_help = types.KeyboardButton("📞 الدعم والمساعدة")
-
-    # ✅ تلوين الأزرار (ميزة جديدة)
-    btn_settings.text_color = "blue"
-    btn_share.text_color = "green"
-    btn_stats.text_color = "purple"
-    btn_top.text_color = "gold"
-    btn_help.text_color = "red"
-
-    markup.add(btn_settings, btn_share)
-    markup.add(btn_stats)
-    markup.add(btn_top, btn_help)
+    markup.add(types.KeyboardButton("⚙️ إعدادات البوست"), types.KeyboardButton("🔗 مشاركة وتفعيل ⚡️"))
+    markup.add(types.KeyboardButton("📊 إحصائيات الحضور 💎"))
+    markup.add(types.KeyboardButton("👑 قائمة المتصدرين"), types.KeyboardButton("📞 الدعم والمساعدة"))
     return markup
 
 # 🚀 أمر البداية
@@ -74,11 +62,15 @@ def send_welcome(message):
 
     welcome_text = (
         f"<b>أهلاً بك - {message.from_user.first_name}.</b> 🤖\n\n"
-        "<blockquote>✨ الآن البوت يدعم أزرار ملونة وتحديثات حديثة من تيليجرام!</blockquote>\n\n"
+        "<blockquote>✨ البوت الآن يعمل عبر Webhook بدون مشاكل تضارب!</blockquote>\n\n"
         f"📊 <b>عدد زوار بوستاتك:</b> {total_visits}\n\n"
         "<b>اختر من القائمة أدناه:</b>"
     )
 
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="HTML")
 
-# باقي الدوال (إعدادات، مشاركة، إحصائيات، إلخ) تبقى كما هي مع تحسينات طفيفة
+# 🖥️ إعداد Webhook
+@app.route('/' + TOKEN, methods=['POST'])
+def getMessage():
+    json_str = request.get_data().decode('UTF-8')
+    update = telebot.types
