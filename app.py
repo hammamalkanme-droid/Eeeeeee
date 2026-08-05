@@ -18,7 +18,6 @@ ADMIN_ID = 1250493517
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# تسجيل الويب هوك هنا مباشرة ليعمل مع سيرفر الإنتاج (Gunicorn) فور الإقلاع
 try:
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
@@ -156,6 +155,11 @@ def init_db():
                         PRIMARY KEY (question_id, user_id)
                     )''')
     
+    cursor.execute('''CREATE TABLE IF NOT EXISTS system_settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT
+                    )''')
+    
     conn.commit()
     conn.close()
 
@@ -197,6 +201,47 @@ def create_colored_btn(text, callback_data=None, url=None, style="primary"):
     btn.style = style 
     return btn
 
+def check_forced_subscription(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM system_settings WHERE key = 'forced_channel'")
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or not row[0]:
+        return True
+        
+    channel_username = row[0]
+    try:
+        member = bot.get_chat_member(channel_username, user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            return True
+    except Exception as e:
+        print(f"Subscription check error: {e}")
+        return True # للسماح بالعمل في حال وجود خطأ بالصلاحيات أو المعرف
+    return False
+
+def send_subscription_required_message(chat_id):
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM system_settings WHERE key = 'forced_channel'")
+    row = cursor.fetchone()
+    conn.close()
+    channel_username = row[0] if row else "@Channel"
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(create_colored_btn("📢 اشترك في القناة الآن", url=f"https://t.me/{channel_username.replace('@', '')}", style="primary"))
+    markup.add(create_colored_btn("🔄 تحقق من الاشتراك", callback_data="check_sub", style="success"))
+    
+    msg = (
+        f"⛔ عذراً، يجب عليك الاشتراك في قناة البوت الرسمية أولاً لكي تتمكن من استخدامه.\n\n"
+        f"📌 قناة الاشتراك: <b>{channel_username}</b>\n\n"
+        f"<i>اضغط على زر الاشتراك ثم اضغط على (تحقق من الاشتراك).</i>"
+    )
+    bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=markup)
+
 def get_main_inline_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_settings = create_colored_btn("⚙️ إعدادات البوست", callback_data="menu_settings", style="primary")
@@ -234,7 +279,14 @@ def send_welcome(message):
     cursor.execute("INSERT INTO user_profiles (user_id, full_name, username) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET full_name = ?, username = ?", 
                    (user_id, message.from_user.first_name, uname_str, message.from_user.first_name, uname_str))
     conn.commit()
+    conn.close()
 
+    if not check_forced_subscription(user_id):
+        send_subscription_required_message(message.chat.id)
+        return
+
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
     args = message.text.split()
     if len(args) > 1 and message.text.startswith('/start'):
         try:
@@ -273,6 +325,34 @@ def send_welcome(message):
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="HTML", reply_markup=markup)
 
+@bot.callback_query_handler(func=lambda call: call.data == "check_sub")
+def callback_check_subscription(call):
+    user_id = call.from_user.id
+    if check_forced_subscription(user_id):
+        bot.answer_callback_query(call.id, "✅ شكراً لاشتراكك! يمكنك استخدام البوت الآن.", show_alert=True)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        # عرض القائمة الرئيسية مباشرة
+        conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+        p_res = cursor.fetchone()
+        user_points = p_res[0] if p_res else 0
+        badge_name, badge_icon = get_user_badge(user_points)
+        conn.close()
+        
+        markup = get_main_inline_keyboard(user_id)
+        welcome_text = (
+            f"✨ <b>مرحباً بك مجدداً يا {call.from_user.first_name}</b>\n\n"
+            f"🏅 <b>وسامك الحالي:</b> {badge_icon} <b>{badge_name}</b>\n\n"
+            f"👇 <b>اختر ما تحتاجه من الأزرار أدناه:</b>"
+        )
+        bot.send_message(call.message.chat.id, welcome_text, parse_mode="HTML", reply_markup=markup)
+    else:
+        bot.answer_callback_query(call.id, "❌ لم تقم بالاشتراك في القناة بعد أو لم يتم رصد اشتراكك!", show_alert=True)
+
 @bot.message_handler(commands=['backup'])
 def cmd_backup(message):
     if message.from_user.id != ADMIN_ID:
@@ -300,12 +380,19 @@ def process_restore_file(message):
         downloaded_file = bot.download_file(file_info.file_path)
         with open('roulette_bot.db', 'wb') as f:
             f.write(downloaded_file)
-        bot.reply_to(message, "✅ <b>تم استعادة قاعدة البيانات (Restore) بنجاح وبدء العمل بالنسخة الجديدة!</b>", parse_mode="HTML")
+        
+        # إعادة تهيئة الجداول فوراً لمنع توقف البوت في حال كانت النسخة القديمة تفتقر لجداول أو أعمدة جديدة
+        init_db()
+        
+        bot.reply_to(message, "✅ <b>تم استعادة قاعدة البيانات (Restore) وتحديث الهيكلية بنجاح وبدء العمل بالنسخة الجديدة!</b>", parse_mode="HTML")
     except Exception as e:
         bot.reply_to(message, f"❌ <b>فشل استعادة قاعدة البيانات:</b> <code>{e}</code>", parse_mode="HTML")
 
 @bot.message_handler(commands=['points', 'رصيدي'])
 def cmd_points(message):
+    if not check_forced_subscription(message.from_user.id):
+        send_subscription_required_message(message.chat.id)
+        return
     user_id = message.from_user.id
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -318,6 +405,9 @@ def cmd_points(message):
 
 @bot.message_handler(commands=['profile'])
 def cmd_profile(message):
+    if not check_forced_subscription(message.from_user.id):
+        send_subscription_required_message(message.chat.id)
+        return
     show_profile_data(message.chat.id, message.from_user.id)
 
 def show_profile_data(chat_id, user_id):
@@ -375,18 +465,20 @@ def cmd_admin(message):
 def show_admin_panel(chat_id):
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM user_settings")
+    cursor.execute("SELECT COUNT(*) FROM user_profiles")
     total_users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM polls")
     total_polls = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM coupons")
     total_coupons = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM scheduled_posts")
-    total_scheduled = cursor.fetchone()[0]
+    cursor.execute("SELECT value FROM system_settings WHERE key = 'forced_channel'")
+    f_row = cursor.fetchone()
+    forced_channel_status = f_row[0] if f_row and f_row[0] else "غير مفعلة ❌"
     conn.close()
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(create_colored_btn("📢 إرسال رسالة جماعية (Broadcast)", callback_data="admin_broadcast", style="danger"))
+    markup.add(create_colored_btn("📢 تعيين / تعديل قناة الاشتراك الإجباري", callback_data="admin_set_forced_channel", style="primary"))
     markup.add(create_colored_btn("📊 إرسال التقرير الأسبوعي الفوري", callback_data="admin_send_weekly_report", style="success"))
     markup.add(create_colored_btn("👥 إدارة مصممي الأسئلة", callback_data="admin_manage_q_creators", style="primary"))
     
@@ -394,15 +486,46 @@ def show_admin_panel(chat_id):
         f"👑 <b>لوحة تحكم المشرف العامة:</b>\n\n"
         f"<blockquote>• <b>إجمالي المستخدمين المسجلين:</b> <code>{total_users}</code>\n"
         f"• <b>إجمالي بوستات الحضور:</b> <code>{total_polls}</code>\n"
-        f"• <b>الposts المجدولة نشطة:</b> <code>{total_scheduled}</code>\n"
+        f"• <b>قناة الاشتراك الإجباري:</b> <code>{forced_channel_status}</code>\n"
         f"• <b>إجمالي الكوبونات النشطة:</b> <code>{total_coupons}</code>\n"
-        f"• <b>أوامر النظام المساعدة:</b> استخدم <code>/backup</code> لتحميل نسخة احتياطية أو <code>/restore</code> لاستعادة البيانات.</blockquote>"
+        f"• <b>أوامر النظام:</b> استخدم <code>/backup</code> أو <code>/restore</code>.</blockquote>"
     )
     bot.send_message(chat_id, admin_panel, parse_mode="HTML", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_set_forced_channel")
+def admin_set_forced_channel_prompt(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
+        return
+    user_states[ADMIN_ID] = "waiting_forced_channel_input"
+    bot.answer_callback_query(call.id)
+    bot.send_message(ADMIN_ID, "📢 <b>أرسل الآن معرف القناة للاشتراك الإجباري (مثال: <code>@MyChannel</code> أو أرسل <code>off</code> لإلغاء التفعيل):</b>", parse_mode="HTML")
+
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and user_states.get(ADMIN_ID) == "waiting_forced_channel_input")
+def save_forced_channel_input(message):
+    user_states.pop(ADMIN_ID, None)
+    val = message.text.strip()
+    conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    if val.lower() == 'off':
+        cursor.execute("DELETE FROM system_settings WHERE key = 'forced_channel'")
+        conn.commit()
+        conn.close()
+        bot.reply_to(message, "✅ <b>تم إلغاء تفعيل ميزة الاشتراك الإجباري بنجاح.</b>", parse_mode="HTML")
+    else:
+        cursor.execute("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('forced_channel', ?)", (val,))
+        conn.commit()
+        conn.close()
+        bot.reply_to(message, f"✅ <b>تم تعيين قناة الاشتراك الإجباري بنجاح إلى:</b> <code>{val}</code>\n\nتأكد أن البوت مشرف في تلك القناة لكي يتمكن من فحص العضوية.", parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_callbacks(call):
     user_id = call.from_user.id
+    if not check_forced_subscription(user_id):
+        bot.answer_callback_query(call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True)
+        send_subscription_required_message(call.message.chat.id)
+        return
+
     action = call.data.replace("menu_", "")
     
     if action == "settings":
@@ -836,6 +959,11 @@ def q_step_publish(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
 def handle_question_answer(call):
+    if not check_forced_subscription(call.from_user.id):
+        bot.answer_callback_query(call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True)
+        send_subscription_required_message(call.message.chat.id)
+        return
+
     raw_data = call.data[4:]
     last_underscore_idx = raw_data.rfind('_')
     if last_underscore_idx == -1:
@@ -1180,15 +1308,12 @@ def send_weekly_report_to_admin():
     week_ago_ts = now_ts - (7 * 24 * 60 * 60)
     two_weeks_ago_ts = now_ts - (14 * 24 * 60 * 60)
     
-    # 1. إجمالي الحضور خلال الأسبوع الحالي
     cursor.execute("SELECT COUNT(*) FROM poll_votes WHERE vote_timestamp >= ?", (week_ago_ts,))
     current_week_attendance = cursor.fetchone()[0] or 0
     
-    # 2. إجمالي الحضور خلال الأسبوع السابق (لمقارنة نسبة النمو)
     cursor.execute("SELECT COUNT(*) FROM poll_votes WHERE vote_timestamp >= ? AND vote_timestamp < ?", (two_weeks_ago_ts, week_ago_ts))
     prev_week_attendance = cursor.fetchone()[0] or 0
     
-    # حساب نسبة النمو مقارنة بالأسبوع السابق
     if prev_week_attendance > 0:
         growth_rate = round(((current_week_attendance - prev_week_attendance) / prev_week_attendance) * 100, 1)
     else:
@@ -1196,7 +1321,6 @@ def send_weekly_report_to_admin():
         
     growth_sign = "+" if growth_rate >= 0 else ""
     
-    # 3. تحديد أكثر الأيام تفاعلاً خلال الأسبوع
     cursor.execute("""
         SELECT date_str, SUM(count) as total_cnt 
         FROM channel_daily_attendance 
@@ -1246,13 +1370,14 @@ def execute_broadcast(message):
     broadcast_text = message.text
     conn = sqlite3.connect('roulette_bot.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM user_settings")
+    # تم التصحيح هنا ليأخذ جميع المستخدمين المسجلين في البوت عبر user_profiles بدلاً من user_settings
+    cursor.execute("SELECT user_id FROM user_profiles")
     users = cursor.fetchall()
     conn.close()
     
     success_count = 0
     fail_count = 0
-    status_msg = bot.reply_to(message, "🚀 <i>جاري بدء إرسال الرسالة الجماعية..</i>", parse_mode="HTML")
+    status_msg = bot.reply_to(message, "🚀 <i>جاري بدء إرسال الرسالة الجماعية لجميع المستخدمين..</i>", parse_mode="HTML")
     for (uid,) in users:
         try:
             bot.send_message(uid, f"📢 <b>تنبيه هام من الإدارة:</b>\n\n<blockquote>{broadcast_text}</blockquote>", parse_mode="HTML")
@@ -1262,7 +1387,7 @@ def execute_broadcast(message):
     bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=status_msg.message_id,
-        text=f"✅ <b>تم الانتهاء من الإرسال الجماعي بنجاح!</b>\n\n<blockquote>• تم بنجاح: <code>{success_count}</code>\n• فشل: <code>{fail_count}</code></blockquote>",
+        text=f"✅ <b>تم الانتهاء من الإرسال الجماعي بنجاح!</b>\n\n<blockquote>• تم بنجاح: <code>{success_count}</code>\n• فشل (حظروا البوت أو أوقفوه): <code>{fail_count}</code></blockquote>",
         parse_mode="HTML"
     )
 
@@ -1287,6 +1412,11 @@ def forward_support_message(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
 def handle_channel_attendance(call):
+    if not check_forced_subscription(call.from_user.id):
+        bot.answer_callback_query(call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True)
+        send_subscription_required_message(call.message.chat.id)
+        return
+
     poll_id = call.data.replace("attend_", "")
     user = call.from_user
     current_time = time.time()
@@ -1395,7 +1525,6 @@ def background_scheduler_loop():
             current_t = time.time()
             now_dt = datetime.now()
             
-            # 1. إرسال التقرير الأسبوعي الآلي كل يوم جمعة في تمام الساعة 10:00 صباحاً (مثال) أو مرة كل 7 أيام
             if now_dt.weekday() == 4 and now_dt.hour == 10 and now_dt.day != last_weekly_report_day:
                 send_weekly_report_to_admin()
                 last_weekly_report_day = now_dt.day
@@ -1439,7 +1568,7 @@ def webhook_listener():
 
 @app.route("/")
 def index():
-    return "Bot is running perfectly with advanced analytics, badges, scheduling, speed races and automated weekly reports!", 200
+    return "Bot is running perfectly with advanced analytics, badges, scheduling, speed races, automated weekly reports and forced subscription!", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
