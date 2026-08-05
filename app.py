@@ -6,7 +6,8 @@ import os
 
 TOKEN = "8843031279:AAHZKUZDKGwczgjLDgufG9TNCqdD1yL1nRY"
 # ضع رابط مشروعك الصحيح في Railway هنا مباشرة بدون علامات عربية
-WEBHOOK_URL = f"eeeeeee-production.up.railway.app}" 
+WEBHOOK_URL = f"https://eeeeeee-production.up.railway.app/{TOKEN}"
+
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
