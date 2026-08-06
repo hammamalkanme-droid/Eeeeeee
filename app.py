@@ -11,9 +11,8 @@ from flask import Flask, request
 import telebot
 from telebot import types
 
-TOKEN = "8602756904:AAEI_n7qamsQGOx4zwkh89hj4d4uIw4tSkE"
-WEBHOOK_URL = f"https://kkl-production-e29c.up.railway.app/{TOKEN}"
-
+TOKEN = "7986003994:AAHKfkigM7d07MARwaNpAicXQbcXEY1ugWU"
+WEBHOOK_URL = f"https://eeeeeee-production.up.railway.app/{TOKEN}"
 ADMIN_ID = 1250493517
 BOT_URL = "https://t.me/DaftarHQBot"
 
@@ -21,6 +20,7 @@ bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 
+# مسار استقبال طلبات تيليجرام (Webhook)
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
   if request.headers.get("content-type") == "application/json":
@@ -47,6 +47,28 @@ def init_db():
     cursor.execute(
         "ALTER TABLE user_settings ADD COLUMN show_on_leaderboard INTEGER"
         " DEFAULT 1"
+    )
+  except sqlite3.OperationalError:
+    pass
+
+  # تحديث جدول الملفات الشخصية لدعم ميزة سلسلة الحضور (Daily Streaks)
+  cursor.execute("""CREATE TABLE IF NOT EXISTS user_profiles (
+                        user_id INTEGER PRIMARY KEY,
+                        full_name TEXT,
+                        username TEXT,
+                        joined_timestamp REAL DEFAULT 0,
+                        streak_count INTEGER DEFAULT 0,
+                        last_attendance_date TEXT
+                    )""")
+  try:
+    cursor.execute(
+        "ALTER TABLE user_profiles ADD COLUMN streak_count INTEGER DEFAULT 0"
+    )
+  except sqlite3.OperationalError:
+    pass
+  try:
+    cursor.execute(
+        "ALTER TABLE user_profiles ADD COLUMN last_attendance_date TEXT"
     )
   except sqlite3.OperationalError:
     pass
@@ -110,13 +132,6 @@ def init_db():
 
   cursor.execute("""CREATE TABLE IF NOT EXISTS authorized_question_creators (
                         user_id INTEGER PRIMARY KEY
-                    )""")
-
-  cursor.execute("""CREATE TABLE IF NOT EXISTS user_profiles (
-                        user_id INTEGER PRIMARY KEY,
-                        full_name TEXT,
-                        username TEXT,
-                        joined_timestamp REAL DEFAULT 0
                     )""")
 
   cursor.execute("""CREATE TABLE IF NOT EXISTS interactions (
@@ -229,7 +244,8 @@ def log_user_interaction(user_id, username, first_name):
     is_new = True
     cursor.execute(
         "INSERT INTO user_profiles (user_id, full_name, username,"
-        " joined_timestamp) VALUES (?, ?, ?, ?)",
+        " joined_timestamp, streak_count, last_attendance_date) VALUES (?, ?,"
+        " ?, ?, 0, '')",
         (user_id, first_name, uname_str, now_ts),
     )
   else:
@@ -338,7 +354,7 @@ def send_subscription_required_message(chat_id):
   markup = types.InlineKeyboardMarkup(row_width=1)
   markup.add(
       create_colored_btn(
-          "📢 اشترك في القناة الآن",
+          " اشترك في القناة الآن",
           url=f"https://t.me/{channel_username.replace('@', '')}",
           style="primary",
       )
@@ -608,8 +624,14 @@ def callback_check_subscription(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
 def handle_attendance_click(call):
   user_id = call.from_user.id
+  if not check_forced_subscription(user_id):
+    bot.answer_callback_query(
+        call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True
+    )
+    send_subscription_required_message(call.message.chat.id)
+    return
+
   poll_id = call.data.replace("attend_", "")
-  
   conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
   cursor = conn.cursor()
 
@@ -636,21 +658,6 @@ def handle_attendance_click(call):
       channel_id,
       message_id,
   ) = poll
-
-  # --- [ميزة عزل الصلاحيات وحماية القنوات]: التحقق من اشتراك المستخدم في قناة المشرف الخاصة ---
-  try:
-    member = bot.get_chat_member(channel_id, user_id)
-    if member.status not in ["member", "administrator", "creator"]:
-      bot.answer_callback_query(
-          call.id, 
-          "⛔ عذراً، يجب عليك الاشتراك في قناة هذا المشرف لتتمكن من تسجيل الحضور!", 
-          show_alert=True
-      )
-      conn.close()
-      return
-  except Exception as e:
-    print(f"Channel membership check warning: {e}")
-  # ----------------------------------------------------------------------------------------
 
   if is_closed == 1:
     bot.answer_callback_query(
@@ -695,12 +702,45 @@ def handle_attendance_click(call):
   cursor.execute("UPDATE polls SET count = ? WHERE poll_id = ?", (new_count, poll_id))
 
   today_str = datetime.now().strftime("%Y-%m-%d")
+  yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
   cursor.execute(
       "INSERT INTO channel_daily_attendance (user_id, channel_id, date_str,"
       " count) VALUES (?, ?, ?, 1) ON CONFLICT(user_id, channel_id, date_str) DO"
       " UPDATE SET count = count + 1",
       (user_id, channel_id, today_str),
   )
+
+  cursor.execute(
+      "SELECT streak_count, last_attendance_date FROM user_profiles WHERE"
+      " user_id = ?",
+      (user_id,),
+  )
+  streak_row = cursor.fetchone()
+  current_streak = 0
+  last_date = ""
+  if streak_row:
+    current_streak = streak_row[0] or 0
+    last_date = streak_row[1] or ""
+
+  if last_date == today_str:
+    streak_msg_extra = ""
+  elif last_date == yesterday_str:
+    current_streak += 1
+    cursor.execute(
+        "UPDATE user_profiles SET streak_count = ?, last_attendance_date = ? WHERE"
+        " user_id = ?",
+        (current_streak, today_str, user_id),
+    )
+    streak_msg_extra = f"\n🔥 سلسلة حضور متتالية: {current_streak} أيام!"
+  else:
+    current_streak = 1
+    cursor.execute(
+        "UPDATE user_profiles SET streak_count = ?, last_attendance_date = ? WHERE"
+        " user_id = ?",
+        (current_streak, today_str, user_id),
+    )
+    streak_msg_extra = "\n🔥 بدأت سلسلة حضور جديدة اليوم (1 أيام)."
 
   try:
     chat_info = bot.get_chat(channel_id)
@@ -715,7 +755,7 @@ def handle_attendance_click(call):
       (str(channel_id), channel_title, channel_title),
   )
 
-  points_earned = 10
+  points_earned = 10 + (min(current_streak, 5) * 2)
   cursor.execute(
       "INSERT INTO user_points (user_id, points) VALUES (?, ?) ON"
       " CONFLICT(user_id) DO UPDATE SET points = points + ?",
@@ -784,7 +824,7 @@ def handle_attendance_click(call):
   bot.answer_callback_query(
       call.id,
       f"✅ تم تسجيل حضورك بنجاح!\n➕ حصلت على {points_earned} نقاط ووسام: {b_icon}"
-      f" {b_name}",
+      f" {b_name}{streak_msg_extra}",
       show_alert=True,
   )
 
@@ -901,6 +941,12 @@ def show_profile_data(chat_id, user_id):
   rank = higher_users + 1
 
   cursor.execute(
+      "SELECT streak_count FROM user_profiles WHERE user_id = ?", (user_id,)
+  )
+  st_res = cursor.fetchone()
+  streak_count = st_res[0] if st_res and st_res[0] else 0
+
+  cursor.execute(
       "SELECT COUNT(*), SUM(is_correct) FROM question_answers WHERE user_id ="
       " ?",
       (user_id,),
@@ -908,9 +954,7 @@ def show_profile_data(chat_id, user_id):
   q_res = cursor.fetchone()
   total_q = q_res[0] if q_res and q_res[0] else 0
   correct_q = q_res[1] if q_res and q_res[1] else 0
-  accuracy = (
-      round((correct_q / total_q) * 100, 1) if total_q > 0 else 0.0
-  )
+  accuracy = round((correct_q / total_q) * 100, 1) if total_q > 0 else 0.0
 
   cursor.execute(
       "SELECT DISTINCT channel_title, channel_id FROM saved_channels WHERE"
@@ -934,8 +978,9 @@ def show_profile_data(chat_id, user_id):
       f"👤 <b>لوحة الملف الشخصي والإحصائيات الفردية:</b>\n\n🏅 <b>الوسام"
       f" والرتبة:</b>\n<blockquote>• الوسام الحالي: {badge_icon} <b>{badge_name}</b>\n•"
       f" رصيد النقاط: <code>{pts}</code> نقطة\n• الرتبة العالمية: المركز"
-      f" <code>{rank}</code></blockquote>\n\n📊 <b>سجل إجابات الأسئلة وتحديات"
-      f" السرعة:</b>\n<blockquote>• إجمالي الأسئلة المشارك بها:"
+      f" <code>{rank}</code>\n• 🔥 سلسلة الحضور المتتالية:"
+      f" <code>{streak_count}</code> أيام</blockquote>\n\n📊 <b>سجل إجابات الأسئلة"
+      f" وتحديات السرعة:</b>\n<blockquote>• إجمالي الأسئلة المشارك بها:"
       f" <code>{total_q}</code>\n• الإجابات الصحيحة:"
       f" <code>{correct_q}</code>\n• نسبة الدقة:"
       f" <code>{accuracy}%</code></blockquote>\n\n🌐 <b>القنوات والمجموعات"
@@ -1175,57 +1220,6 @@ def save_forced_channel_input(message):
     )
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
-def admin_broadcast_prompt(call):
-  if call.from_user.id != ADMIN_ID:
-    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
-    return
-  user_states[ADMIN_ID] = "waiting_broadcast_msg"
-  bot.answer_callback_query(call.id)
-  bot.send_message(
-      ADMIN_ID,
-      "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast) لجميع المستخدمين:</i>",
-      parse_mode="HTML",
-  )
-
-
-@bot.message_handler(
-    func=lambda message: message.from_user.id == ADMIN_ID
-    and user_states.get(ADMIN_ID) == "waiting_broadcast_msg"
-)
-def execute_broadcast(message):
-  user_states.pop(ADMIN_ID, None)
-  broadcast_text = message.text
-  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
-  cursor = conn.cursor()
-  cursor.execute("SELECT user_id FROM user_profiles")
-  users = cursor.fetchall()
-  conn.close()
-
-  sent_count = 0
-  failed_count = 0
-  status_msg = bot.reply_to(message, "🚀 جاري إرسال الرسالة الجماعية...")
-
-  for (uid,) in users:
-    try:
-      bot.send_message(uid, broadcast_text, parse_mode="HTML")
-      sent_count += 1
-      time.sleep(0.05)
-    except Exception:
-      failed_count += 1
-
-  bot.edit_message_text(
-      chat_id=message.chat.id,
-      message_id=status_msg.message_id,
-      text=(
-          f"✅ <b>تم الانتهاء من الإذاعة الجماعية!</b>\n\n• تم الإرسال بنجاح:"
-            f" <code>{sent_count}</code>\n• فشل الإرسال:"
-            f" <code>{failed_count}</code>"
-      ),
-      parse_mode="HTML",
-  )
-
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_callbacks(call):
   user_id = call.from_user.id
@@ -1431,11 +1425,10 @@ def handle_menu_callbacks(call):
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
       for i, (c_title, c_visits, show_priv) in enumerate(top_channels):
         medal = medals[i] if i < len(medals) else "🔹"
-        name_display = (
-            "قناة مخفية 🔒"
-            if show_priv == 0
-            else (html.escape(c_title) if c_title else "قناة")
-        )
+        if show_priv == 0:
+          name_display = "قناة مخفية 🔒"
+        else:
+          name_display = html.escape(c_title) if c_title else "قناة"
         leaderboard_text += (
             f"<blockquote>{medal} <b>{name_display}</b> — <b>{c_visits}</b>"
             " زائر</blockquote>\n"
@@ -1449,11 +1442,10 @@ def handle_menu_callbacks(call):
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
       for i, (uid, count, fname, show_priv) in enumerate(top_users):
         medal = medals[i] if i < len(medals) else "🔹"
-        name_display = (
-            "مستخدم مخفي 🔒"
-            if show_priv == 0
-            else (html.escape(fname) if fname else f"مستخدم {uid}")
-        )
+        if show_priv == 0:
+          name_display = "مستخدم مخفي 🔒"
+        else:
+          name_display = html.escape(fname) if fname else f"مستخدم {uid}"
         leaderboard_text += (
             f"<blockquote>{medal} <b>{name_display}</b> — <b>{count}</b>"
             " زائر</blockquote>\n"
@@ -1470,11 +1462,10 @@ def handle_menu_callbacks(call):
       for i, (uid, pts, fname, b_icon, show_priv) in enumerate(top_points):
         medal = medals[i] if i < len(medals) else "🔹"
         icon = b_icon if b_icon else "🏅"
-        name_display = (
-            "مستخدم مخفي 🔒"
-            if show_priv == 0
-            else (html.escape(fname) if fname else f"مستخدم {uid}")
-        )
+        if show_priv == 0:
+          name_display = "مستخدم مخفي 🔒"
+        else:
+          name_display = html.escape(fname) if fname else f"مستخدم {uid}"
         leaderboard_text += (
             f"<blockquote>{medal} {icon} <b>{name_display}</b> — <b>{pts}</b>"
             " نقطة</blockquote>\n"
@@ -2218,13 +2209,6 @@ def q_step_publish(message):
   channel_input = message.text.strip()
   q_data = user_states.pop(user_id, None)
 
-  try:
-    chat_info = bot.get_chat(channel_input)
-    real_channel_id = str(chat_info.id)
-  except Exception as e:
-    bot.reply_to(message, f"❌ فشل الوصول للقناة: <code>{e}</code>", parse_mode="HTML")
-    return
-
   question_id = f"q_{user_id}_{int(time.time())}"
   q_text = q_data["q_text"]
   oa = q_data["opt_a"]
@@ -2261,7 +2245,7 @@ def q_step_publish(message):
 
   try:
     sent_msg = bot.send_message(
-        real_channel_id,
+        channel_input,
         q_msg_content,
         parse_mode="HTML",
         reply_markup=keyboard,
@@ -2282,7 +2266,7 @@ def q_step_publish(message):
             oc,
             od,
             correct_opt,
-            real_channel_id,
+            str(sent_msg.chat.id),
             sent_msg.message_id,
         ),
     )
@@ -2304,6 +2288,13 @@ def q_step_publish(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
 def handle_question_answer(call):
+  if not check_forced_subscription(call.from_user.id):
+    bot.answer_callback_query(
+        call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True
+    )
+    send_subscription_required_message(call.message.chat.id)
+    return
+
   raw_data = call.data[4:]
   last_underscore_idx = raw_data.rfind("_")
   if last_underscore_idx == -1:
@@ -2339,22 +2330,6 @@ def handle_question_answer(call):
       channel_id,
       message_id,
   ) = q_row
-
-  # --- [ميزة عزل الصلاحيات وحماية القنوات]: التحقق من اشتراك المستخدم في قناة المشرف الخاصة بالسؤال ---
-  try:
-    member = bot.get_chat_member(channel_id, user.id)
-    if member.status not in ["member", "administrator", "creator"]:
-      bot.answer_callback_query(
-          call.id, 
-          "⛔ عذراً، يجب عليك الاشتراك في قناة هذا المشرف لتتمكن من الإجابة!", 
-          show_alert=True
-      )
-      conn.close()
-      return
-  except Exception as e:
-    print(f"Question channel membership check warning: {e}")
-  # ----------------------------------------------------------------------------------------------
-
   if is_closed == 1:
     bot.answer_callback_query(
         call.id, "⌛ عذراً، تم إغلاق هذا السؤال!", show_alert=True
@@ -2831,6 +2806,59 @@ def export_attendance_csv(call):
   )
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def admin_broadcast_prompt(call):
+  if call.from_user.id != ADMIN_ID:
+    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
+    return
+  user_states[ADMIN_ID] = "waiting_broadcast_msg"
+  bot.answer_callback_query(call.id)
+  bot.send_message(
+      ADMIN_ID,
+      "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast):</i>",
+      parse_mode="HTML",
+  )
+
+
+@bot.message_handler(
+    func=lambda message: message.from_user.id == ADMIN_ID
+    and user_states.get(ADMIN_ID) == "waiting_broadcast_msg"
+)
+def execute_admin_broadcast(message):
+  user_states.pop(ADMIN_ID, None)
+  broadcast_text = message.text
+
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT user_id FROM user_profiles")
+  users = cursor.fetchall()
+  conn.close()
+
+  success_count = 0
+  fail_count = 0
+
+  status_msg = bot.reply_to(message, "⏳ جارٍ إرسال الرسالة الجماعية للمستخدمين...")
+
+  for (u_id,) in users:
+    try:
+      bot.send_message(u_id, broadcast_text, parse_mode="HTML")
+      success_count += 1
+      time.sleep(0.05)  # لتجنب حظر تيليجرام (Flood Wait)
+    except Exception:
+      fail_count += 1
+
+  bot.edit_message_text(
+      chat_id=message.chat.id,
+      message_id=status_msg.message_id,
+      text=(
+          "✅ <b>تم الانتهاء من الإرسال الجماعي!</b>\n\n• تم بنجاح:"
+          f" <code>{success_count}</code>\n• فشل (حظر البوت):"
+          f" <code>{fail_count}</code>"
+      ),
+      parse_mode="HTML",
+  )
+
+
 @bot.callback_query_handler(func=lambda call: call.data == "admin_send_weekly_report")
 def send_weekly_report_manual(call):
   if call.from_user.id != ADMIN_ID:
@@ -2866,35 +2894,28 @@ def send_weekly_report_to_admin():
   )
   prev_week_attendance = cursor.fetchone()[0] or 0
 
-  if prev_week_attendance > 0:
-    growth_rate = round(
-        (
-            (current_week_attendance - prev_week_attendance)
-            / prev_week_attendance
-        )
-        * 100,
-        1,
-    )
-  else:
-    growth_rate = 100.0 if current_week_attendance > 0 else 0.0
+  cursor.execute(
+      "SELECT COUNT(*) FROM user_profiles WHERE joined_timestamp >= ?",
+      (week_ago_ts,),
+  )
+  new_users_week = cursor.fetchone()[0] or 0
 
   conn.close()
 
   report_text = (
-      f"📊 <b>التقرير الأسبوعي التلقائي لنشاط البوت:</b>\n\n• إجمالي تفاعلات"
-      f" الأسبوع الحالي: <code>{current_week_attendance}</code>\n• نسبة النمو"
-      f" مقارنة بالأسبوع الماضي: <code>{growth_rate}%</code>"
+      f"📈 <b>التقرير الأسبوعي التحليلي للبوت:</b>\n\n• 👥 المستخدمون الجدد هذا"
+      f" الأسبوع: <code>{new_users_week}</code>\n• ✅ تفاعلات الحضور هذا الأسبوع:"
+      f" <code>{current_week_attendance}</code>\n• 📉 تفاعلات الحضور الأسبوع"
+      f" الماضي: <code>{prev_week_attendance}</code>"
   )
   try:
     bot.send_message(ADMIN_ID, report_text, parse_mode="HTML")
-  except Exception:
-    pass
+  except Exception as e:
+    print(f"Failed to send weekly report: {e}")
 
 
 if __name__ == "__main__":
-  try:
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-  except Exception as e:
-    print(f"Server error: {e}")
+  threading.Thread(
+      target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+  ).start()
+  bot.infinity_polling()
