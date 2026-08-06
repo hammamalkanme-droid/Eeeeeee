@@ -11,8 +11,9 @@ from flask import Flask, request
 import telebot
 from telebot import types
 
-TOKEN = "7986003994:AAHKfkigM7d07MARwaNpAicXQbcXEY1ugWU"
-WEBHOOK_URL = f"https://eeeeeee-production.up.railway.app/{TOKEN}"
+TOKEN = "8602756904:AAEI_n7qamsQGOx4zwkh89hj4d4uIw4tSkE"
+WEBHOOK_URL = f"https://kkl-production-e29c.up.railway.app/{TOKEN}"
+
 ADMIN_ID = 1250493517
 BOT_URL = "https://t.me/DaftarHQBot"
 
@@ -20,7 +21,6 @@ bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 
-# مسار استقبال طلبات تيليجرام (Webhook)
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
   if request.headers.get("content-type") == "application/json":
@@ -102,7 +102,6 @@ def init_db():
   except sqlite3.OperationalError:
     pass
 
-  # جدول تتبع إجمالي الزوار لكل قناة (أكثر القنوات حصولاً على الزوار)
   cursor.execute("""CREATE TABLE IF NOT EXISTS channel_total_visits (
                         channel_id TEXT PRIMARY KEY,
                         channel_title TEXT,
@@ -606,18 +605,11 @@ def callback_check_subscription(call):
     )
 
 
-# --- معالج زر تسجيل الحضور وتحديث عداد زوار القناة تلقائياً ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("attend_"))
 def handle_attendance_click(call):
   user_id = call.from_user.id
-  if not check_forced_subscription(user_id):
-    bot.answer_callback_query(
-        call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True
-    )
-    send_subscription_required_message(call.message.chat.id)
-    return
-
   poll_id = call.data.replace("attend_", "")
+  
   conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
   cursor = conn.cursor()
 
@@ -644,6 +636,21 @@ def handle_attendance_click(call):
       channel_id,
       message_id,
   ) = poll
+
+  # --- [ميزة عزل الصلاحيات وحماية القنوات]: التحقق من اشتراك المستخدم في قناة المشرف الخاصة ---
+  try:
+    member = bot.get_chat_member(channel_id, user_id)
+    if member.status not in ["member", "administrator", "creator"]:
+      bot.answer_callback_query(
+          call.id, 
+          "⛔ عذراً، يجب عليك الاشتراك في قناة هذا المشرف لتتمكن من تسجيل الحضور!", 
+          show_alert=True
+      )
+      conn.close()
+      return
+  except Exception as e:
+    print(f"Channel membership check warning: {e}")
+  # ----------------------------------------------------------------------------------------
 
   if is_closed == 1:
     bot.answer_callback_query(
@@ -695,7 +702,6 @@ def handle_attendance_click(call):
       (user_id, channel_id, today_str),
   )
 
-  # تحديث وزيادة عداد الزوار الكلي للقناة (أكثر القنوات حصولاً على الزوار)
   try:
     chat_info = bot.get_chat(channel_id)
     channel_title = chat_info.title or channel_id
@@ -1169,6 +1175,57 @@ def save_forced_channel_input(message):
     )
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def admin_broadcast_prompt(call):
+  if call.from_user.id != ADMIN_ID:
+    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
+    return
+  user_states[ADMIN_ID] = "waiting_broadcast_msg"
+  bot.answer_callback_query(call.id)
+  bot.send_message(
+      ADMIN_ID,
+      "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast) لجميع المستخدمين:</i>",
+      parse_mode="HTML",
+  )
+
+
+@bot.message_handler(
+    func=lambda message: message.from_user.id == ADMIN_ID
+    and user_states.get(ADMIN_ID) == "waiting_broadcast_msg"
+)
+def execute_broadcast(message):
+  user_states.pop(ADMIN_ID, None)
+  broadcast_text = message.text
+  conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("SELECT user_id FROM user_profiles")
+  users = cursor.fetchall()
+  conn.close()
+
+  sent_count = 0
+  failed_count = 0
+  status_msg = bot.reply_to(message, "🚀 جاري إرسال الرسالة الجماعية...")
+
+  for (uid,) in users:
+    try:
+      bot.send_message(uid, broadcast_text, parse_mode="HTML")
+      sent_count += 1
+      time.sleep(0.05)
+    except Exception:
+      failed_count += 1
+
+  bot.edit_message_text(
+      chat_id=message.chat.id,
+      message_id=status_msg.message_id,
+      text=(
+          f"✅ <b>تم الانتهاء من الإذاعة الجماعية!</b>\n\n• تم الإرسال بنجاح:"
+            f" <code>{sent_count}</code>\n• فشل الإرسال:"
+            f" <code>{failed_count}</code>"
+      ),
+      parse_mode="HTML",
+  )
+
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu_"))
 def handle_menu_callbacks(call):
   user_id = call.from_user.id
@@ -1331,7 +1388,6 @@ def handle_menu_callbacks(call):
     conn = sqlite3.connect("roulette_bot.db", check_same_thread=False)
     cursor = conn.cursor()
 
-    # جلب أكثر القنوات حصولاً على الزوار مع فحص إعداد الخصوصية
     cursor.execute("""
             SELECT c.channel_title, c.visits_count, MAX(COALESCE(sc.show_on_leaderboard, 1)) as show_priv
             FROM channel_total_visits c
@@ -1342,7 +1398,6 @@ def handle_menu_callbacks(call):
         """)
     top_channels = cursor.fetchall()
 
-    # جلب أكثر المستخدمين جلباً للزوار مع فحص الخصوصية
     cursor.execute("""
             SELECT r.owner_id, r.visits_count, p.full_name, COALESCE(us.show_on_leaderboard, 1) as show_priv
             FROM referrals r 
@@ -1353,7 +1408,6 @@ def handle_menu_callbacks(call):
         """)
     top_users = cursor.fetchall()
 
-    # جلب أكثر الأعضاء تفاعلاً ونقاطاً مع فحص الخصوصية
     cursor.execute("""
             SELECT tp.user_id, tp.points, p.full_name, b.badge_icon, COALESCE(us.show_on_leaderboard, 1) as show_priv
             FROM user_points tp 
@@ -1368,7 +1422,6 @@ def handle_menu_callbacks(call):
 
     leaderboard_text = "🏆 <b>قوائم المتصدرين في البوت:</b>\n\n"
 
-    # قائمة أكثر القنوات زواراً
     leaderboard_text += "📢 <b>أكثر القنوات حصولاً على الزوار:</b>\n"
     if not top_channels:
       leaderboard_text += (
@@ -1378,17 +1431,17 @@ def handle_menu_callbacks(call):
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
       for i, (c_title, c_visits, show_priv) in enumerate(top_channels):
         medal = medals[i] if i < len(medals) else "🔹"
-        if show_priv == 0:
-          name_display = "قناة مخفية 🔒"
-        else:
-          name_display = html.escape(c_title) if c_title else "قناة"
+        name_display = (
+            "قناة مخفية 🔒"
+            if show_priv == 0
+            else (html.escape(c_title) if c_title else "قناة")
+        )
         leaderboard_text += (
             f"<blockquote>{medal} <b>{name_display}</b> — <b>{c_visits}</b>"
             " زائر</blockquote>\n"
         )
       leaderboard_text += "\n"
 
-    # قائمة أكثر المستخدمين جلباً للزوار
     leaderboard_text += "🔗 <b>أكثر المستخدمين جلباً للزوار:</b>\n"
     if not top_users:
       leaderboard_text += "<blockquote>• لا توجد بيانات حتى الآن..</blockquote>\n\n"
@@ -1396,17 +1449,17 @@ def handle_menu_callbacks(call):
       medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
       for i, (uid, count, fname, show_priv) in enumerate(top_users):
         medal = medals[i] if i < len(medals) else "🔹"
-        if show_priv == 0:
-          name_display = "مستخدم مخفي 🔒"
-        else:
-          name_display = html.escape(fname) if fname else f"مستخدم {uid}"
+        name_display = (
+            "مستخدم مخفي 🔒"
+            if show_priv == 0
+            else (html.escape(fname) if fname else f"مستخدم {uid}")
+        )
         leaderboard_text += (
             f"<blockquote>{medal} <b>{name_display}</b> — <b>{count}</b>"
             " زائر</blockquote>\n"
         )
       leaderboard_text += "\n"
 
-    # قائمة أكثر الأعضاء تفاعلاً ونقاطاً
     leaderboard_text += "🌟 <b>أكثر الأعضاء تفاعلاً ونقاطاً والأوسمة:</b>\n"
     if not top_points:
       leaderboard_text += (
@@ -1417,10 +1470,11 @@ def handle_menu_callbacks(call):
       for i, (uid, pts, fname, b_icon, show_priv) in enumerate(top_points):
         medal = medals[i] if i < len(medals) else "🔹"
         icon = b_icon if b_icon else "🏅"
-        if show_priv == 0:
-          name_display = "مستخدم مخفي 🔒"
-        else:
-          name_display = html.escape(fname) if fname else f"مستخدم {uid}"
+        name_display = (
+            "مستخدم مخفي 🔒"
+            if show_priv == 0
+            else (html.escape(fname) if fname else f"مستخدم {uid}")
+        )
         leaderboard_text += (
             f"<blockquote>{medal} {icon} <b>{name_display}</b> — <b>{pts}</b>"
             " نقطة</blockquote>\n"
@@ -1471,7 +1525,6 @@ def handle_menu_callbacks(call):
     show_admin_panel(call.message.chat.id)
 
 
-# --- معالجات إعدادات الخصوصية والظهور في المتصدرين ---
 @bot.callback_query_handler(func=lambda call: call.data == "set_privacy_leaderboard")
 def callback_set_privacy_leaderboard(call):
   user_id = call.from_user.id
@@ -2165,6 +2218,13 @@ def q_step_publish(message):
   channel_input = message.text.strip()
   q_data = user_states.pop(user_id, None)
 
+  try:
+    chat_info = bot.get_chat(channel_input)
+    real_channel_id = str(chat_info.id)
+  except Exception as e:
+    bot.reply_to(message, f"❌ فشل الوصول للقناة: <code>{e}</code>", parse_mode="HTML")
+    return
+
   question_id = f"q_{user_id}_{int(time.time())}"
   q_text = q_data["q_text"]
   oa = q_data["opt_a"]
@@ -2201,7 +2261,7 @@ def q_step_publish(message):
 
   try:
     sent_msg = bot.send_message(
-        channel_input,
+        real_channel_id,
         q_msg_content,
         parse_mode="HTML",
         reply_markup=keyboard,
@@ -2222,7 +2282,7 @@ def q_step_publish(message):
             oc,
             od,
             correct_opt,
-            str(sent_msg.chat.id),
+            real_channel_id,
             sent_msg.message_id,
         ),
     )
@@ -2244,13 +2304,6 @@ def q_step_publish(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ans_"))
 def handle_question_answer(call):
-  if not check_forced_subscription(call.from_user.id):
-    bot.answer_callback_query(
-        call.id, "يجب عليك الاشتراك في القناة أولاً ⛔", show_alert=True
-    )
-    send_subscription_required_message(call.message.chat.id)
-    return
-
   raw_data = call.data[4:]
   last_underscore_idx = raw_data.rfind("_")
   if last_underscore_idx == -1:
@@ -2286,6 +2339,22 @@ def handle_question_answer(call):
       channel_id,
       message_id,
   ) = q_row
+
+  # --- [ميزة عزل الصلاحيات وحماية القنوات]: التحقق من اشتراك المستخدم في قناة المشرف الخاصة بالسؤال ---
+  try:
+    member = bot.get_chat_member(channel_id, user.id)
+    if member.status not in ["member", "administrator", "creator"]:
+      bot.answer_callback_query(
+          call.id, 
+          "⛔ عذراً، يجب عليك الاشتراك في قناة هذا المشرف لتتمكن من الإجابة!", 
+          show_alert=True
+      )
+      conn.close()
+      return
+  except Exception as e:
+    print(f"Question channel membership check warning: {e}")
+  # ----------------------------------------------------------------------------------------------
+
   if is_closed == 1:
     bot.answer_callback_query(
         call.id, "⌛ عذراً، تم إغلاق هذا السؤال!", show_alert=True
@@ -2762,20 +2831,6 @@ def export_attendance_csv(call):
   )
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
-def admin_broadcast_prompt(call):
-  if call.from_user.id != ADMIN_ID:
-    bot.answer_callback_query(call.id, "للمشرف فقط ⛔", show_alert=True)
-    return
-  user_states[ADMIN_ID] = "waiting_broadcast_msg"
-  bot.answer_callback_query(call.id)
-  bot.send_message(
-      ADMIN_ID,
-      "📢 <i>أرسل الآن نص الرسالة الجماعية (Broadcast):</i>",
-      parse_mode="HTML",
-  )
-
-
 @bot.callback_query_handler(func=lambda call: call.data == "admin_send_weekly_report")
 def send_weekly_report_manual(call):
   if call.from_user.id != ADMIN_ID:
@@ -2823,46 +2878,23 @@ def send_weekly_report_to_admin():
   else:
     growth_rate = 100.0 if current_week_attendance > 0 else 0.0
 
-  growth_sign = "+" if growth_rate >= 0 else ""
+  conn.close()
 
-  cursor.execute("""
-        SELECT date_str, SUM(count) as total_cnt 
-        FROM channel_daily_attendance 
-        GROUP BY date_str 
-        ORDER BY total_cnt DESC 
-        LIMIT 1
-    """)
-  top_day_row = cursor.fetchone()
-  if top_day_row and top_day_row[0]:
-    days_trans = {
-        "Saturday": "السبت",
-        "Sunday": "الأحد",
-        "Monday": "الإثنين",
-        "Tuesday": "الثلاثاء",
-        "Wednesday": "الأربعاء",
-        "Thursday": "الخميس",
-        "Friday": "الجمعة",
-    }
-    try:
-      dt_obj = datetime.strptime(top_day_row[0], "%Y-%m-%d")
-      day_name_ar = days_trans.get(dt_obj.strftime("%A"), dt_obj.strftime("%A"))
-      top_day_str = (
-          f"{day_name_ar} ({top_day_row[0]}) - إجمالي التفاعلات:"
-          f" {top_day_row[1]}"
-      )
-    except Exception:
-      top_day_str = f"{top_day_row[0]} - التفاعلات: {top_day_row[1]}"
-  else:
-    top_day_str = "لا توجد بيانات كافية"
+  report_text = (
+      f"📊 <b>التقرير الأسبوعي التلقائي لنشاط البوت:</b>\n\n• إجمالي تفاعلات"
+      f" الأسبوع الحالي: <code>{current_week_attendance}</code>\n• نسبة النمو"
+      f" مقارنة بالأسبوع الماضي: <code>{growth_rate}%</code>"
+  )
+  try:
+    bot.send_message(ADMIN_ID, report_text, parse_mode="HTML")
+  except Exception:
+    pass
 
 
 if __name__ == "__main__":
   try:
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
-    print("Webhook set successfully!")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
   except Exception as e:
-    print(f"Error setting webhook: {e}")
-
-  port = int(os.environ.get("PORT", 8080))
-  app.run(host="0.0.0.0", port=port)
+    print(f"Server error: {e}")
